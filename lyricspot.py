@@ -80,15 +80,21 @@ def parse_lrc(lrc_text):
     return sorted(lines, key=lambda x: x[0])
 
 
+CACHE_DIR  = os.path.expanduser("~/.cache/lyricspot")
+CACHE_PATH = os.path.join(CACHE_DIR, ".spotify_cache")
+
+
 class SpotifyPoller:
     def __init__(self):
         if not HAS_SPOTIPY:
             raise RuntimeError("spotipy not installed")
+        os.makedirs(CACHE_DIR, exist_ok=True)
         self.sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
             redirect_uri=REDIRECT_URI,
             scope=SPOTIFY_SCOPE,
+            cache_path=CACHE_PATH,
         ))
 
     def now_playing(self):
@@ -263,29 +269,84 @@ class LyricSpot:
             pass
 
 
+def detect_shell():
+    shell = os.environ.get("SHELL", "")
+    if "fish" in shell:
+        return "fish"
+    if "zsh" in shell:
+        return "zsh"
+    return "bash"
+
+def get_shell_config(shell):
+    if shell == "fish":
+        return os.path.expanduser("~/.config/fish/config.fish")
+    if shell == "zsh":
+        return os.path.expanduser("~/.zshrc")
+    return os.path.expanduser("~/.bashrc")
+
+def format_env_lines(shell, client_id, client_secret, redirect_uri):
+    if shell == "fish":
+        return (
+            f'set -x SPOTIPY_CLIENT_ID "{client_id}"\n'
+            f'set -x SPOTIPY_CLIENT_SECRET "{client_secret}"\n'
+            f'set -x SPOTIPY_REDIRECT_URI "{redirect_uri}"\n'
+        )
+    return (
+        f'export SPOTIPY_CLIENT_ID="{client_id}"\n'
+        f'export SPOTIPY_CLIENT_SECRET="{client_secret}"\n'
+        f'export SPOTIPY_REDIRECT_URI="{redirect_uri}"\n'
+    )
+
+def run_setup():
+    shell      = detect_shell()
+    config     = get_shell_config(shell)
+    redirect   = "http://127.0.0.1:8888/callback"
+
+    print("╭─────────────────────────────────────────────────────────────╮")
+    print("│  lyricspot setup                                            │")
+    print("╰─────────────────────────────────────────────────────────────╯")
+    print()
+    print("  1. Go to https://developer.spotify.com/dashboard")
+    print("  2. Create an app")
+    print(f"  3. Add this redirect URI:  {redirect}")
+    print()
+
+    client_id     = input("  Paste your Client ID:      ").strip()
+    client_secret = input("  Paste your Client Secret:  ").strip()
+
+    if not client_id or not client_secret:
+        print("\n  nothing entered, exiting.")
+        return
+
+    lines = format_env_lines(shell, client_id, client_secret, redirect)
+
+    with open(config, "a") as f:
+        f.write("\n# lyricspot\n")
+        f.write(lines)
+
+    print()
+    print(f"  saved to {config}")
+    print(f"  detected shell: {shell}")
+    print()
+    if shell == "fish":
+        print("  reload with:  source ~/.config/fish/config.fish")
+    else:
+        print(f"  reload with:  source {config}")
+    print()
+    print("  then re-run lyricspot.")
+
+
 def main():
     if not HAS_SPOTIPY:
         print("✗  spotipy missing — run: pip install spotipy pillow colorthief")
         sys.exit(1)
 
     if CLIENT_ID == "YOUR_CLIENT_ID":
-        print("""
-╭─────────────────────────────────────────────────────────────╮
-│  lyricspot — first-time setup                               │
-├─────────────────────────────────────────────────────────────┤
-│  1. Go to https://developer.spotify.com/dashboard           │
-│  2. Create an app, add redirect URI:                        │
-│       http://127.0.0.1:8888/callback                        │
-│  3. Export your credentials:                                │
-│       export SPOTIPY_CLIENT_ID=...                          │
-│       export SPOTIPY_CLIENT_SECRET=...                      │
-│       export SPOTIPY_REDIRECT_URI=http://127.0.0.1:8888/callback
-│  4. Re-run:  python lyricspot.py                            │
-╰─────────────────────────────────────────────────────────────╯
-""")
+        run_setup()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
+    sys.stderr = open(os.devnull, "w")
     LyricSpot().run()
 
 

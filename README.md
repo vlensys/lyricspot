@@ -1,7 +1,6 @@
 # lyricspot
 
-Live synced lyrics in your terminal, pulled from whatever is playing on Spotify.
-Colors are extracted from the album art and applied in real time. Toggle to your terminal's native palette with `Y`, nudge the lyric timing with arrow keys.
+Live synced lyrics in your terminal, pulled from whatever is playing on Spotify. Colors are extracted from the album art. Toggle to your terminal's native palette with `Y`, nudge the lyric timing with arrow keys.
 
 ```
  ♪  Redbone
@@ -16,37 +15,49 @@ Colors are extracted from the album art and applied in real time. Toggle to your
      Gon' catch you sleepin'
 ```
 
-## install
+## dependencies
 
 ```bash
 python -m venv ~/.venv/lyricspot
-source ~/.venv/lyricspot/bin/activate.fish  # fish shell
+source ~/.venv/lyricspot/bin/activate.fish  # fish
 # source ~/.venv/lyricspot/bin/activate     # bash/zsh
 pip install spotipy pillow colorthief
 ```
 
-`pillow` and `colorthief` are optional. Without them dynamic colors are disabled and it falls back to your terminal palette.
+`pillow` and `colorthief` are optional. Without them dynamic colors are disabled.
 
 ## spotify setup
 
 1. Go to [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard)
 2. Create an app
 3. In app settings add this redirect URI: `http://127.0.0.1:8888/callback`
-4. Copy your Client ID and Client Secret
-5. Set them before running:
+4. Run the script once with no credentials set and it will walk you through the rest
 
-```fish
-set -x SPOTIPY_CLIENT_ID "your_id_here"
-set -x SPOTIPY_CLIENT_SECRET "your_secret_here"
-set -x SPOTIPY_REDIRECT_URI "http://127.0.0.1:8888/callback"
-```
+On first run lyricspot detects your shell, asks for your Client ID and Secret, and writes the correct export syntax directly to your config file (`config.fish`, `.zshrc`, or `.bashrc`). After that, reload your config and run again.
 
-A browser window will open on first run asking you to authorize. After that the token is cached automatically.
+## running
 
-## run
+The cleanest way is a small launcher script so you never have to activate the venv manually:
 
 ```bash
-python lyricspot.py
+echo '#!/bin/bash' > run.sh
+echo 'VENV="$HOME/.venv/lyricspot/bin/python"' >> run.sh
+echo 'SCRIPT="$(realpath "$0" | xargs dirname)/lyricspot.py"' >> run.sh
+echo '"$VENV" "$SCRIPT"' >> run.sh
+chmod +x run.sh
+ln -sf (pwd)/run.sh ~/.local/bin/lyricspot
+```
+
+Then just run:
+
+```bash
+lyricspot
+```
+
+Make sure `~/.local/bin` is in your PATH. In fish:
+
+```fish
+fish_add_path ~/.local/bin
 ```
 
 ## controls
@@ -54,18 +65,10 @@ python lyricspot.py
 | key | action |
 |-----|--------|
 | `Y` | toggle dynamic album colors / terminal colors |
-| `↑` or `+` | shift lyrics forward by 0.25s |
-| `↓` or `-` | shift lyrics back by 0.25s |
+| `↑` or `+` | shift lyrics forward 0.25s |
+| `↓` or `-` | shift lyrics back 0.25s |
 | `Q` / `Esc` | quit |
 
-## launcher (optional)
+## tuning
 
-Save this as `lyricspot` somewhere in your `$PATH` like `~/.local/bin/`:
-
-```bash
-#!/bin/bash
-source ~/.venv/lyricspot/bin/activate
-python /path/to/lyricspot.py
-```
-
-Then `chmod +x ~/.local/bin/lyricspot` and you can run it from anywhere without activating the venv first.
+If lyrics feel ahead or behind, use `↑` and `↓` while the song is playing to dial in the offset live. The current value shows in the top right of the UI. To make a new default permanent, change `SYNC_OFFSET` at the top of `lyricspot.py`.
