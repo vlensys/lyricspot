@@ -471,7 +471,7 @@ def main():
 
     if "--bugs" in sys.argv:
         print("we've fixed", fixes, "bugs!")
-    sys.exit(0)
+        sys.exit(0)
 
     if CLIENT_ID == "YOUR_CLIENT_ID":
         run_setup()
