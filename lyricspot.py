@@ -17,7 +17,7 @@ except ImportError:
     HAS_COLOR = False
 
 fixes = 7 # increment this by one per every bug fixed
-
+# or not, who cares?
 # config
 SPOTIFY_SCOPE     = "user-read-playback-state user-read-currently-playing"
 LRCLIB_URL        = "https://lrclib.net/api/get"
