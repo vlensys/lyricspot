@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-
+__version__ = "1.1.1"
 import os, sys, time, threading, signal, urllib.request, urllib.parse, json, io, re
 import curses
 
