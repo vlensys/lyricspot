@@ -17,11 +17,19 @@ except ImportError:
     HAS_COLOR = False
 
 # config
-SPOTIFY_SCOPE = "user-read-playback-state user-read-currently-playing"
-LRCLIB_URL    = "https://lrclib.net/api/get"
-POLL_INTERVAL = 2
-SYNC_OFFSET   = 0.35   # tweak if lyrics feel early/late
-OFFSET_STEP   = 0.25   # how much +/- adjusts per keypress
+SPOTIFY_SCOPE     = "user-read-playback-state user-read-currently-playing"
+LRCLIB_URL        = "https://lrclib.net/api/get"
+POLL_INTERVAL     = 2
+SYNC_OFFSET       = 0.85
+OFFSET_STEP       = 0.15
+
+LYRICS_CENTERED   = True
+SHOW_UI           = True
+CURRENT_BOLD      = True
+CURRENT_UPPERCASE = True
+CURRENT_DOUBLE    = True
+CURRENT_STANDOUT  = False
+INACTIVE_DIM      = True
 
 CLIENT_ID     = os.environ.get("SPOTIPY_CLIENT_ID",     "YOUR_CLIENT_ID")
 CLIENT_SECRET = os.environ.get("SPOTIPY_CLIENT_SECRET", "YOUR_CLIENT_SECRET")
@@ -68,7 +76,7 @@ def fetch_synced_lyrics(title, artist, album="", duration=0):
             return [(0, l) for l in data["plainLyrics"].splitlines()], False
     except Exception:
         pass
-    return [(0, "  ♪  lyrics not found  ♪  ")], False
+    return [(0, "  lyrics not found  ")], False
 
 def parse_lrc(lrc_text):
     lines = []
@@ -116,19 +124,40 @@ class SpotifyPoller:
             return None
 
 
+SETTINGS = [
+    ("show ui",           "show_ui"),
+    ("lyrics centered",   "lyrics_centered"),
+    ("current bold",      "current_bold"),
+    ("current uppercase", "current_uppercase"),
+    ("current double",    "current_double"),
+    ("current standout",  "current_standout"),
+    ("inactive dim",      "inactive_dim"),
+    ("dynamic colors",    "dynamic"),
+]
+
+
 class LyricSpot:
     def __init__(self):
-        self.poller      = SpotifyPoller()
-        self.track       = None
-        self.lyrics      = []
-        self.synced      = False
-        self.dynamic     = True
-        self.col_primary = None
-        self.col_second  = None
-        self.offset      = SYNC_OFFSET
-        self.lock        = threading.Lock()
-        self.running     = True
-        self._last_id    = None
+        self.poller           = SpotifyPoller()
+        self.track            = None
+        self.lyrics           = []
+        self.synced           = False
+        self.dynamic          = True
+        self.show_ui          = SHOW_UI
+        self.lyrics_centered  = LYRICS_CENTERED
+        self.current_bold     = CURRENT_BOLD
+        self.current_uppercase= CURRENT_UPPERCASE
+        self.current_double   = CURRENT_DOUBLE
+        self.current_standout = CURRENT_STANDOUT
+        self.inactive_dim     = INACTIVE_DIM
+        self.col_primary      = None
+        self.col_second       = None
+        self.offset           = SYNC_OFFSET
+        self.lock             = threading.Lock()
+        self.running          = True
+        self._last_id         = None
+        self.settings_open    = False
+        self.settings_cursor  = 0
 
     def _poll(self):
         while self.running:
@@ -157,6 +186,44 @@ class LyricSpot:
         curses.init_pair(2, fg_dim,    -1)
         curses.init_pair(3, fg_header, -1)
 
+    def _place(self, text, w):
+        if self.lyrics_centered:
+            x = max(0, (w - len(text)) // 2)
+        else:
+            x = 0
+        return x, text[:max(1, w - x - 1)]
+
+    def _draw_settings(self, scr, h, w):
+        panel_w = 36
+        panel_h = len(SETTINGS) + 4
+        py = max(0, (h - panel_h) // 2)
+        px = max(0, (w - panel_w) // 2)
+
+        for row in range(panel_h):
+            self._safe_addstr(scr, py + row, px, " " * panel_w, curses.color_pair(3))
+
+        title = "  settings"
+        self._safe_addstr(scr, py,     px, title + " " * (panel_w - len(title)), curses.color_pair(3) | curses.A_BOLD)
+        self._safe_addstr(scr, py + 1, px, "  " + "─" * (panel_w - 4) + "  ",   curses.color_pair(3))
+
+        for i, (label, attr) in enumerate(SETTINGS):
+            val     = getattr(self, attr)
+            toggle  = "on " if val else "off"
+            row_y   = py + 2 + i
+            is_sel  = i == self.settings_cursor
+            prefix  = "  ▶ " if is_sel else "    "
+            text    = f"{prefix}{label:<22}{toggle}"
+            text    = text[:panel_w]
+            text   += " " * (panel_w - len(text))
+            a = curses.color_pair(3)
+            if is_sel: a |= curses.A_BOLD | curses.A_STANDOUT
+            self._safe_addstr(scr, row_y, px, text, a)
+
+        hint = "  space/enter: toggle   s: close"
+        hint = hint[:panel_w]
+        hint += " " * (panel_w - len(hint))
+        self._safe_addstr(scr, py + panel_h - 1, px, hint, curses.color_pair(3) | curses.A_DIM)
+
     def _main(self, scr):
         curses.curs_set(0)
         curses.start_color()
@@ -169,22 +236,35 @@ class LyricSpot:
 
         while self.running:
             key = scr.getch()
-            if key in (ord('q'), ord('Q'), 27):
-                self.running = False
-                break
-            if key in (ord('y'), ord('Y')):
-                self.dynamic = not self.dynamic
-                self._apply_colors()
-            if key == curses.KEY_UP or key == ord('+'):
-                self.offset = round(self.offset + OFFSET_STEP, 2)
-            if key == curses.KEY_DOWN or key == ord('-'):
-                self.offset = round(self.offset - OFFSET_STEP, 2)
+
+            if self.settings_open:
+                if key in (ord('s'), ord('S'), 27):
+                    self.settings_open = False
+                elif key == curses.KEY_UP:
+                    self.settings_cursor = (self.settings_cursor - 1) % len(SETTINGS)
+                elif key == curses.KEY_DOWN:
+                    self.settings_cursor = (self.settings_cursor + 1) % len(SETTINGS)
+                elif key in (ord(' '), 10, 13, curses.KEY_ENTER):
+                    attr = SETTINGS[self.settings_cursor][1]
+                    setattr(self, attr, not getattr(self, attr))
+                    if attr == "dynamic":
+                        self._apply_colors()
+            else:
+                if key in (ord('q'), ord('Q'), 27):
+                    self.running = False
+                    break
+                if key in (ord('s'), ord('S')):
+                    self.settings_open   = True
+                    self.settings_cursor = 0
+                if key == curses.KEY_UP or key == ord('+'):
+                    self.offset = round(self.offset + OFFSET_STEP, 2)
+                if key == curses.KEY_DOWN or key == ord('-'):
+                    self.offset = round(self.offset - OFFSET_STEP, 2)
 
             with self.lock:
                 track   = self.track
                 lyrics  = list(self.lyrics)
                 synced  = self.synced
-                dynamic = self.dynamic
                 pal     = (self.col_primary, self.col_second)
                 offset  = self.offset
 
@@ -196,9 +276,11 @@ class LyricSpot:
             scr.erase()
 
             if not track:
-                msg = "♪  nothing playing on Spotify  ♪"
+                msg = "nothing playing on Spotify"
                 self._safe_addstr(scr, h//2, max(0,(w-len(msg))//2), msg,
                                   curses.color_pair(2) | curses.A_DIM)
+                if self.settings_open:
+                    self._draw_settings(scr, h, w)
                 scr.refresh()
                 time.sleep(0.4)
                 continue
@@ -210,23 +292,26 @@ class LyricSpot:
                     if ts <= progress:
                         cur = i
 
-            dur      = track["duration"]
-            prog     = track["progress"]
-            bar_w    = max(10, w - 22)
-            filled   = int(bar_w * min(prog / max(dur, 1), 1))
-            bar      = "─" * filled + "╸" + " " * (bar_w - filled)
-            time_str = f"{int(prog)//60}:{int(prog)%60:02d} / {int(dur)//60}:{int(dur)%60:02d}"
-            theme_icon = "◉" if dynamic else "○"
-            hint     = f"[Y] {'dynamic' if dynamic else 'terminal'}  [↑/↓] offset:{offset:+.2f}s  [Q] quit  {theme_icon}"
+            if self.show_ui:
+                dur        = track["duration"]
+                prog       = track["progress"]
+                bar_w      = max(10, w - 22)
+                filled     = int(bar_w * min(prog / max(dur, 1), 1))
+                bar        = "─" * filled + "╸" + " " * (bar_w - filled)
+                time_str   = f"{int(prog)//60}:{int(prog)%60:02d} / {int(dur)//60}:{int(dur)%60:02d}"
+                hint       = f"[S] settings  [↑/↓] offset:{offset:+.2f}s  [Q] quit"
 
-            attr_h = curses.color_pair(3) | curses.A_BOLD
-            self._safe_addstr(scr, 0, 0, f" ♪  {track['title']}"[:w-1],  attr_h)
-            self._safe_addstr(scr, 1, 0, f"    {track['artist']}"[:w-1], curses.color_pair(2))
-            self._safe_addstr(scr, 2, 0, f" {bar} {time_str}"[:w-1],     curses.color_pair(2))
-            self._safe_addstr(scr, 3, max(0, w-len(hint)-1), hint[:w-1], curses.color_pair(2) | curses.A_DIM)
-            self._safe_addstr(scr, 4, 0, "─" * (w-1),                    curses.color_pair(2) | curses.A_DIM)
+                attr_h = curses.color_pair(3) | curses.A_BOLD
+                self._safe_addstr(scr, 0, 0, f" ♪  {track['title']}"[:w-1],  attr_h)
+                self._safe_addstr(scr, 1, 0, f"    {track['artist']}"[:w-1], curses.color_pair(2))
+                self._safe_addstr(scr, 2, 0, f" {bar} {time_str}"[:w-1],     curses.color_pair(2))
+                self._safe_addstr(scr, 3, max(0, w-len(hint)-1), hint[:w-1], curses.color_pair(2) | curses.A_DIM)
+                self._safe_addstr(scr, 4, 0, "─" * (w-1),                    curses.color_pair(2) | curses.A_DIM)
+                lyric_start = 5
+            else:
+                lyric_start = 0
 
-            lyric_area = h - 6
+            lyric_area = h - lyric_start
             half       = lyric_area // 2
             start      = max(0, cur - half)
             end        = min(len(lyrics), start + lyric_area)
@@ -236,28 +321,37 @@ class LyricSpot:
             li    = start
             while li < end:
                 ts, text   = lyrics[li]
-                screen_row = 5 + row_i
+                screen_row = lyric_start + row_i
 
                 if li == cur:
-                    attr  = curses.color_pair(1) | curses.A_BOLD
-                    upper = ("  ▶  " + text.upper())[:w-1]
-                    if screen_row < h - 2:
-                        self._safe_addstr(scr, screen_row,     0, upper, attr)
-                        self._safe_addstr(scr, screen_row + 1, 0, upper, attr)
+                    label = text.upper() if self.current_uppercase else text
+                    line  = "  ▶  " + label
+                    attr  = curses.color_pair(1)
+                    if self.current_bold:     attr |= curses.A_BOLD
+                    if self.current_standout: attr |= curses.A_STANDOUT
+                    x, line = self._place(line, w)
+                    if self.current_double and screen_row < h - 2:
+                        self._safe_addstr(scr, screen_row,     x, line, attr)
+                        self._safe_addstr(scr, screen_row + 1, x, line, attr)
                         row_i += 2
                     else:
-                        self._safe_addstr(scr, screen_row, 0, upper, attr)
+                        self._safe_addstr(scr, screen_row, x, line, attr)
                         row_i += 1
                 else:
-                    attr     = curses.color_pair(2) | curses.A_DIM
-                    line_txt = ("     " + text)[:w-1]
+                    line = "     " + text
+                    attr = curses.color_pair(2)
+                    if self.inactive_dim: attr |= curses.A_DIM
+                    x, line = self._place(line, w)
                     if screen_row < h - 1:
-                        self._safe_addstr(scr, screen_row, 0, line_txt, attr)
+                        self._safe_addstr(scr, screen_row, x, line, attr)
                     row_i += 1
 
                 li += 1
-                if 5 + row_i >= h - 1:
+                if lyric_start + row_i >= h - 1:
                     break
+
+            if self.settings_open:
+                self._draw_settings(scr, h, w)
 
             scr.refresh()
 
@@ -271,17 +365,13 @@ class LyricSpot:
 
 def detect_shell():
     shell = os.environ.get("SHELL", "")
-    if "fish" in shell:
-        return "fish"
-    if "zsh" in shell:
-        return "zsh"
+    if "fish" in shell: return "fish"
+    if "zsh"  in shell: return "zsh"
     return "bash"
 
 def get_shell_config(shell):
-    if shell == "fish":
-        return os.path.expanduser("~/.config/fish/config.fish")
-    if shell == "zsh":
-        return os.path.expanduser("~/.zshrc")
+    if shell == "fish": return os.path.expanduser("~/.config/fish/config.fish")
+    if shell == "zsh":  return os.path.expanduser("~/.zshrc")
     return os.path.expanduser("~/.bashrc")
 
 def format_env_lines(shell, client_id, client_secret, redirect_uri):
@@ -298,9 +388,9 @@ def format_env_lines(shell, client_id, client_secret, redirect_uri):
     )
 
 def run_setup():
-    shell      = detect_shell()
-    config     = get_shell_config(shell)
-    redirect   = "http://127.0.0.1:8888/callback"
+    shell    = detect_shell()
+    config   = get_shell_config(shell)
+    redirect = "http://127.0.0.1:8888/callback"
 
     print("╭─────────────────────────────────────────────────────────────╮")
     print("│  lyricspot setup                                            │")
@@ -318,15 +408,12 @@ def run_setup():
         print("\n  nothing entered, exiting.")
         return
 
-    lines = format_env_lines(shell, client_id, client_secret, redirect)
-
     with open(config, "a") as f:
         f.write("\n# lyricspot\n")
-        f.write(lines)
+        f.write(format_env_lines(shell, client_id, client_secret, redirect))
 
     print()
-    print(f"  saved to {config}")
-    print(f"  detected shell: {shell}")
+    print(f"  saved to {config}  (detected shell: {shell})")
     print()
     if shell == "fish":
         print("  reload with:  source ~/.config/fish/config.fish")
