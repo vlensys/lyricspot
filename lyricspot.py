@@ -16,12 +16,14 @@ try:
 except ImportError:
     HAS_COLOR = False
 
+fixes = 7 # increment this by one per every bug fixed
+
 # config
 SPOTIFY_SCOPE     = "user-read-playback-state user-read-currently-playing"
 LRCLIB_URL        = "https://lrclib.net/api/get"
 POLL_INTERVAL     = 2
-SYNC_OFFSET       = 0.85
-OFFSET_STEP       = 0.15
+SYNC_OFFSET       = 0.35
+OFFSET_STEP       = 0.25
 
 LYRICS_CENTERED   = True
 SHOW_UI           = True
@@ -88,8 +90,31 @@ def parse_lrc(lrc_text):
     return sorted(lines, key=lambda x: x[0])
 
 
-CACHE_DIR  = os.path.expanduser("~/.cache/lyricspot")
-CACHE_PATH = os.path.join(CACHE_DIR, ".spotify_cache")
+CACHE_DIR   = os.path.expanduser("~/.cache/lyricspot")
+CACHE_PATH  = os.path.join(CACHE_DIR, ".spotify_cache")
+CONFIG_DIR  = os.path.expanduser("~/.config/lyricspot")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "settings.json")
+
+SETTINGS_KEYS = [
+    "show_ui", "lyrics_centered", "current_bold", "current_uppercase",
+    "current_double", "current_standout", "inactive_dim", "dynamic", "offset",
+]
+
+def load_settings():
+    try:
+        with open(CONFIG_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_settings(obj):
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        data = {k: getattr(obj, k) for k in SETTINGS_KEYS}
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
 
 
 class SpotifyPoller:
@@ -158,6 +183,10 @@ class LyricSpot:
         self._last_id         = None
         self.settings_open    = False
         self.settings_cursor  = 0
+        saved = load_settings()
+        for k, v in saved.items():
+            if hasattr(self, k):
+                setattr(self, k, v)
 
     def _poll(self):
         while self.running:
@@ -249,6 +278,7 @@ class LyricSpot:
                     setattr(self, attr, not getattr(self, attr))
                     if attr == "dynamic":
                         self._apply_colors()
+                    save_settings(self)
             else:
                 if key in (ord('q'), ord('Q'), 27):
                     self.running = False
@@ -258,8 +288,10 @@ class LyricSpot:
                     self.settings_cursor = 0
                 if key == curses.KEY_UP or key == ord('+'):
                     self.offset = round(self.offset + OFFSET_STEP, 2)
+                    save_settings(self)
                 if key == curses.KEY_DOWN or key == ord('-'):
                     self.offset = round(self.offset - OFFSET_STEP, 2)
+                    save_settings(self)
 
             with self.lock:
                 track   = self.track
@@ -427,6 +459,19 @@ def main():
     if not HAS_SPOTIPY:
         print("✗  spotipy missing — run: pip install spotipy pillow colorthief")
         sys.exit(1)
+
+    if "--reset" in sys.argv:
+        try:
+            os.remove(CONFIG_FILE)
+            print("settings cleared.")
+
+        except FileNotFoundError:
+            print("nothing to clear.")
+        sys.exit(0)
+
+    if "--bugs" in sys.argv:
+        print("we've fixed", fixes, "bugs!")
+    sys.exit(0)
 
     if CLIENT_ID == "YOUR_CLIENT_ID":
         run_setup()
