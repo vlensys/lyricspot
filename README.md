@@ -3,16 +3,26 @@
 Live synced lyrics in your terminal, pulled from whatever is playing on Spotify. Colors are extracted from the album art. Toggle to your terminal's native palette with `Y`, nudge the lyric timing with arrow keys.
 
 ```
- ♪  Redbone
-    Childish Gambino
- ──────────────────────────────────── 1:24 / 5:26
-                    [Y] dynamic  [↑/↓] offset:+0.35s  [Q] quit  ◉
-────────────────────────────────────────────────────────────────────
-     Oh, stay woke
-     Niggas creepin'
-  ▶  THEY GON' FIND YOU
-  ▶  THEY GON' FIND YOU
-     Gon' catch you sleepin'
+ ♪  DRUGS IN HER ROOM
+    Yabujin
+ ────────────────────────────────────────────────────────────────────╸                  0:53 / 1:05
+                                                               [S] settings  [↑/↓] offset:+1.15s  [Q] quit
+──────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                                 (Ha-ha-ha-ha)
+                                                        
+                                               Heaven in her eyes
+                                           She's an angel in disguise
+                                           Saw a rainbow in her room
+                                          Love stories will drop soon
+                                               Heaven in her eyes
+                                           She's an angel in disguise
+                                           Saw a rainbow in her room
+                                          Love stories will drop soon
+                           Even you're still searchin', stop, just give me the source
+                               Oh baby, don't love me now, I don't need no words
+                           Even you're still searchin', stop, just give me the source
+                            ▶  OH BABY, DON'T LOVE ME NOW, I DON'T NEED NO WORDS
+                                                                                                               
 ```
 
 ## dependencies
