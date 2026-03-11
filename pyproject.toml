@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "lyricspot"
+version = "1.1.2"
+dependencies = ["spotipy", "pillow", "colorthief"]
+
+[project.scripts]
+lyricspot = "lyricspot:main"
+
+[tool.setuptools]
+py-modules = ["lyricspot"]
