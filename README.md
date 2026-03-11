@@ -54,6 +54,16 @@ Then just run:
 lyricspot
 ```
 
+Alternatively, if you are on an arch-based distro you can download it straight from the AUR 
+```
+# for yay
+yay -S lyricspot
+# or maybe for paru
+paru -S lyricspot
+```
+(please note that ive only tested this with arch and artix. (please report issues in... issues)
+
+
 Make sure `~/.local/bin` is in your PATH. In fish:
 
 ```fish
