@@ -22,7 +22,7 @@ fixes = 7 # increment this by one per every bug fixed
 SPOTIFY_SCOPE     = "user-read-playback-state user-read-currently-playing"
 LRCLIB_URL        = "https://lrclib.net/api/get"
 POLL_INTERVAL     = 2
-SYNC_OFFSET       = 0.35
+SYNC_OFFSET       = 1.35
 OFFSET_STEP       = 0.25
 
 LYRICS_CENTERED   = True
@@ -183,6 +183,9 @@ class LyricSpot:
         self._last_id         = None
         self.settings_open    = False
         self.settings_cursor  = 0
+        self.tap_mode         = False
+        self.tap_times        = []
+        self.tap_lyric_idx    = []
         saved = load_settings()
         for k, v in saved.items():
             if hasattr(self, k):
@@ -292,6 +295,36 @@ class LyricSpot:
                 if key == curses.KEY_DOWN or key == ord('-'):
                     self.offset = round(self.offset - OFFSET_STEP, 2)
                     save_settings(self)
+                if key in (ord('t'), ord('T')):
+                    self.tap_mode      = not self.tap_mode
+                    self.tap_times     = []
+                    self.tap_lyric_idx = []
+                if self.tap_mode and key == ord(' '):
+                    with self.lock:
+                        tr  = self.track
+                        lyr = list(self.lyrics)
+                        syn = self.synced
+                    if tr and syn:
+                        prog    = tr["progress"]
+                        cur_idx = 0
+                        for i, (ts, _) in enumerate(lyr):
+                            if ts <= prog + self.offset:
+                                cur_idx = i
+                        self.tap_times.append((time.time(), prog))
+                        self.tap_lyric_idx.append(cur_idx)
+                        if len(self.tap_times) >= 4:
+                            drifts = []
+                            for j in range(1, len(self.tap_times)):
+                                if self.tap_lyric_idx[j] != self.tap_lyric_idx[j-1]:
+                                    wall_dt  = self.tap_times[j][0] - self.tap_times[j-1][0]
+                                    lyric_dt = lyr[self.tap_lyric_idx[j]][0] - lyr[self.tap_lyric_idx[j-1]][0]
+                                    drifts.append(wall_dt - lyric_dt)
+                            if drifts:
+                                self.offset    = round(self.offset - sum(drifts)/len(drifts), 2)
+                                self.tap_mode  = False
+                                self.tap_times = []
+                                self.tap_lyric_idx = []
+                                save_settings(self)
 
             with self.lock:
                 track   = self.track
@@ -385,7 +418,33 @@ class LyricSpot:
             if self.settings_open:
                 self._draw_settings(scr, h, w)
 
+            if self.tap_mode:
+                self._draw_tap_overlay(scr, h, w)
+
             scr.refresh()
+
+    def _draw_tap_overlay(self, scr, h, w):
+        taps   = len(self.tap_times)
+        needed = max(0, 4 - taps)
+        lines  = [
+            "  tap sync",
+            "  " + "─" * 26,
+            "  tap space as lyrics change",
+            f"  taps: {taps}   need {needed} more",
+            "",
+            "  T: cancel",
+        ]
+        panel_w = 32
+        panel_h = len(lines) + 2
+        py = h - panel_h - 2
+        px = 2
+        for row in range(panel_h):
+            self._safe_addstr(scr, py + row, px, " " * panel_w, curses.color_pair(3))
+        for i, line in enumerate(lines):
+            text  = (line + " " * panel_w)[:panel_w]
+            attr  = curses.color_pair(3)
+            if i == 0: attr |= curses.A_BOLD
+            self._safe_addstr(scr, py + 1 + i, px, text, attr)
 
     @staticmethod
     def _safe_addstr(scr, y, x, text, attr=0):
