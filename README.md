@@ -10,6 +10,8 @@ A lightweight terminal tool that live-syncs song lyrics with whatever you’re p
 pacman -S playerctl
 # nix os
 nix-env -iA nixpkgs.playerctl
+# debian based
+sudo apt install playerctl
 ```
 
 ### AUR
