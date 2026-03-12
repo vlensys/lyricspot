@@ -1,8 +1,14 @@
 # lyricspot
+<img width="2560" height="1584" alt="image" src="https://github.com/user-attachments/assets/76c9dafc-b9e7-4a95-8ab3-a33f4e4d924b" />
 
 Live synced lyrics in your terminal for whatever is playing via MPRIS. Colors are extracted from the album art using the bundled `colorthief.py`. Nudge the lyric timing with arrow keys, toggle UI styles with `Y`.
+# install
 
-
+### AUR
+```
+# just install from the AUR!
+yay -s lyricspot
+```
 ### manual
 
 ```bash
