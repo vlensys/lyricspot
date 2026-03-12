@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-__version__ = "1.1.1"
+
 import os, sys, time, threading, signal, urllib.request, urllib.parse, json, io, re
 import curses
 
@@ -11,18 +11,18 @@ except ImportError:
     HAS_SPOTIPY = False
 
 try:
-    from colorthief import ColorThief
+    import colorthief as _ct
     HAS_COLOR = True
 except ImportError:
     HAS_COLOR = False
 
 fixes = 7 # increment this by one per every bug fixed
-# or not, who cares?
+
 # config
 SPOTIFY_SCOPE     = "user-read-playback-state user-read-currently-playing"
 LRCLIB_URL        = "https://lrclib.net/api/get"
 POLL_INTERVAL     = 2
-SYNC_OFFSET       = 1.35
+SYNC_OFFSET       = 0.35
 OFFSET_STEP       = 0.25
 
 LYRICS_CENTERED   = True
@@ -50,8 +50,7 @@ def palette_from_url(url):
         return None, None
     try:
         req  = urllib.request.urlopen(url, timeout=4)
-        ct   = ColorThief(io.BytesIO(req.read()))
-        pal  = ct.get_palette(color_count=6, quality=1)
+        pal  = _ct.get_palette(req.read(), color_count=6)
         def sat(c):
             mx, mn = max(c)/255, min(c)/255
             return (mx - mn) / (mx + 1e-9)
