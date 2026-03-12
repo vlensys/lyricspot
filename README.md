@@ -7,7 +7,7 @@ Live synced lyrics in your terminal for whatever is playing via MPRIS. Colors ar
 ### AUR
 ```
 # just install from the AUR!
-yay -s lyricspot
+yay -S lyricspot
 ```
 ### manual
 
