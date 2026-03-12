@@ -1,109 +1,59 @@
 #!/usr/bin/env python3
+__version__ = "1.2.1SR"
 
-import os, sys, time, threading, signal, urllib.request, urllib.parse, json, io, re
+import os
+import sys
+import time
+import threading
+import signal
+import urllib.request
+import urllib.parse
+import json
+import io
+import re
+import subprocess
 import curses
 
 try:
-    import spotipy
-    from spotipy.oauth2 import SpotifyOAuth
-    HAS_SPOTIPY = True
-except ImportError:
-    HAS_SPOTIPY = False
-
-try:
-    import colorthief as _ct
+    import colorthief as _lsct
     HAS_COLOR = True
 except ImportError:
+    print("lsct (https://github.com/vlensys/lyricspot/blob/main/colorthief.py) not installed, proceeding without pulling colors")
     HAS_COLOR = False
 
-fixes = 7 # increment this by one per every bug fixed
-
-# config
-SPOTIFY_SCOPE     = "user-read-playback-state user-read-currently-playing"
-LRCLIB_URL        = "https://lrclib.net/api/get"
-POLL_INTERVAL     = 2
-SYNC_OFFSET       = 0.35
-OFFSET_STEP       = 0.25
-
-LYRICS_CENTERED   = True
-SHOW_UI           = True
-CURRENT_BOLD      = True
+LRCLIB_URL = "https://lrclib.net/api/get"
+POLL_INTERVAL = 0.5 # smoother :3
+SYNC_OFFSET = 0.0
+OFFSET_STEP = 0.25
+LYRICS_CENTERED = True
+SHOW_UI = True
+CURRENT_BOLD = True
 CURRENT_UPPERCASE = True
-CURRENT_DOUBLE    = True
-CURRENT_STANDOUT  = False
-INACTIVE_DIM      = True
+CURRENT_DOUBLE = True
+CURRENT_STANDOUT = False
+INACTIVE_DIM = True
+HEADER_MARGIN = 1  # how many lines to leave empty after pb
 
-CLIENT_ID     = os.environ.get("SPOTIPY_CLIENT_ID",     "YOUR_CLIENT_ID")
-CLIENT_SECRET = os.environ.get("SPOTIPY_CLIENT_SECRET", "YOUR_CLIENT_SECRET")
-REDIRECT_URI  = os.environ.get("SPOTIPY_REDIRECT_URI",  "http://127.0.0.1:8888/callback")
-
-
-def rgb_to_256(r, g, b):
-    if r == g == b:
-        if r < 8:   return 16
-        if r > 248: return 231
-        return round((r - 8) / 247 * 24) + 232
-    return 16 + 36 * round(r/255*5) + 6 * round(g/255*5) + round(b/255*5)
-
-def palette_from_url(url):
-    if not HAS_COLOR or not url:
-        return None, None
-    try:
-        req  = urllib.request.urlopen(url, timeout=4)
-        pal  = _ct.get_palette(req.read(), color_count=6)
-        def sat(c):
-            mx, mn = max(c)/255, min(c)/255
-            return (mx - mn) / (mx + 1e-9)
-        pal_s     = sorted(pal, key=sat, reverse=True)
-        primary   = rgb_to_256(*pal_s[0])
-        secondary = rgb_to_256(*pal_s[min(2, len(pal_s)-1)])
-        return primary, secondary
-    except Exception:
-        return None, None
-
-def fetch_synced_lyrics(title, artist, album="", duration=0):
-    params = urllib.parse.urlencode({
-        "track_name":  title,
-        "artist_name": artist,
-        "album_name":  album,
-        "duration":    int(duration),
-    })
-    try:
-        req  = urllib.request.urlopen(f"{LRCLIB_URL}?{params}", timeout=6)
-        data = json.loads(req.read())
-        if data.get("syncedLyrics"):
-            return parse_lrc(data["syncedLyrics"]), True
-        if data.get("plainLyrics"):
-            return [(0, l) for l in data["plainLyrics"].splitlines()], False
-    except Exception:
-        pass
-    return [(0, "  lyrics not found  ")], False
-
-def parse_lrc(lrc_text):
-    lines = []
-    for raw in lrc_text.splitlines():
-        m = re.match(r'\[(\d+):(\d+\.\d+)\](.*)', raw)
-        if m:
-            t = int(m.group(1))*60 + float(m.group(2))
-            lines.append((t, m.group(3).strip()))
-    return sorted(lines, key=lambda x: x[0])
-
-
-CACHE_DIR   = os.path.expanduser("~/.cache/lyricspot")
-CACHE_PATH  = os.path.join(CACHE_DIR, ".spotify_cache")
-CONFIG_DIR  = os.path.expanduser("~/.config/lyricspot")
+CONFIG_DIR = os.path.expanduser("~/.config/lyricspot")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "settings.json")
 
 SETTINGS_KEYS = [
-    "show_ui", "lyrics_centered", "current_bold", "current_uppercase",
-    "current_double", "current_standout", "inactive_dim", "dynamic", "offset",
+    "show_ui",
+    "lyrics_centered",
+    "current_bold",
+    "current_uppercase",
+    "current_double",
+    "current_standout",
+    "inactive_dim",
+    "dynamic",
+    "offset",
 ]
 
 def load_settings():
     try:
         with open(CONFIG_FILE) as f:
             return json.load(f)
-    except Exception:
+    except:
         return {}
 
 def save_settings(obj):
@@ -112,79 +62,122 @@ def save_settings(obj):
         data = {k: getattr(obj, k) for k in SETTINGS_KEYS}
         with open(CONFIG_FILE, "w") as f:
             json.dump(data, f, indent=2)
-    except Exception:
+    except:
         pass
 
+def rgb_to_256(r, g, b):
+    if r == g == b:
+        if r < 8:
+            return 16
+        if r > 248:
+            return 231
+        return round((r - 8) / 247 * 24) + 232
+    return 16 + 36 * round(r / 255 * 5) + 6 * round(g / 255 * 5) + round(b / 255 * 5)
 
-class SpotifyPoller:
-    def __init__(self):
-        if not HAS_SPOTIPY:
-            raise RuntimeError("spotipy not installed")
-        os.makedirs(CACHE_DIR, exist_ok=True)
-        self.sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
-            client_id=CLIENT_ID,
-            client_secret=CLIENT_SECRET,
-            redirect_uri=REDIRECT_URI,
-            scope=SPOTIFY_SCOPE,
-            cache_path=CACHE_PATH,
-        ))
+def palette_from_url(url):
+    if not HAS_COLOR or not url:
+        return None, None
+    try:
+        req = urllib.request.urlopen(url, timeout=4)
+        pal  = _lsct.get_palette(req.read(), color_count=6)
+        def sat(c):
+            mx, mn = max(c) / 255, min(c) / 255
+            return (mx - mn) / (mx + 1e-9)
+        pal_s = sorted(pal, key=sat, reverse=True)
+        primary = rgb_to_256(*pal_s[0])
+        secondary = rgb_to_256(*pal_s[min(2, len(pal_s) - 1)])
+        return primary, secondary
+    except:
+        return None, None
 
-    def now_playing(self):
+def fetch_synced_lyrics(title, artist, album="", duration=0):
+    params = urllib.parse.urlencode({
+        "track_name": title,
+        "artist_name": artist,
+        "album_name": album,
+        "duration": int(duration),
+    })
+    try:
+        req = urllib.request.urlopen(f"{LRCLIB_URL}?{params}", timeout=6)
+        data = json.loads(req.read())
+        if data.get("syncedLyrics"):
+            return parse_lrc(data["syncedLyrics"]), True
+        if data.get("plainLyrics"):
+            return [(0, l) for l in data["plainLyrics"].splitlines()], False
+    except:
+        pass
+    return [(0, "lyrics not found")], False
+
+def parse_lrc(lrc):
+    lines = []
+    for raw in lrc.splitlines():
+        m = re.match(r"\[(\d+):(\d+\.\d+)\](.*)", raw)
+        if m:
+            t = int(m.group(1)) * 60 + float(m.group(2))
+            lines.append((t, m.group(3).strip()))
+    return sorted(lines, key=lambda x: x[0])
+
+class playerctlpoller:
+    def _cmd(self, args):
         try:
-            pb = self.sp.current_playback()
-            if not pb or not pb.get("is_playing"):
-                return None
-            item = pb["item"]
-            return {
-                "title":    item["name"],
-                "artist":   ", ".join(a["name"] for a in item["artists"]),
-                "album":    item["album"]["name"],
-                "duration": item["duration_ms"] / 1000,
-                "progress": pb["progress_ms"] / 1000,
-                "art_url":  item["album"]["images"][0]["url"] if item["album"]["images"] else None,
-                "track_id": item["id"],
-            }
-        except Exception:
+            out = subprocess.check_output(
+                ["playerctl"] + args,
+                stderr=subprocess.DEVNULL
+            )
+            return out.decode().strip()
+        except:
             return None
 
-
-SETTINGS = [
-    ("show ui",           "show_ui"),
-    ("lyrics centered",   "lyrics_centered"),
-    ("current bold",      "current_bold"),
-    ("current uppercase", "current_uppercase"),
-    ("current double",    "current_double"),
-    ("current standout",  "current_standout"),
-    ("inactive dim",      "inactive_dim"),
-    ("dynamic colors",    "dynamic"),
-]
-
+    def now_playing(self):
+        status = self._cmd(["status"])
+        if status not in ("Playing", "Paused"):
+            return None
+        fmt = "{{title}}|{{artist}}|{{album}}|{{mpris:length}}|{{mpris:artUrl}}|{{mpris:trackid}}"
+        meta = self._cmd(["metadata", "--format", fmt])
+        if not meta:
+            return None
+        parts = meta.split("|")
+        if len(parts) < 6:
+            return None
+        title, artist, album, length, art_url, track_id = parts
+        try:
+            duration = int(length) / 1_000_000
+        except:
+            duration = 0
+        try:
+            pos = float(self._cmd(["position"]) or 0)
+        except:
+            pos = 0
+        return {
+            "title": title,
+            "artist": artist,
+            "album": album,
+            "duration": duration,
+            "progress": pos,
+            "art_url": art_url,
+            "track_id": track_id,
+        }
 
 class LyricSpot:
     def __init__(self):
-        self.poller           = SpotifyPoller()
-        self.track            = None
-        self.lyrics           = []
-        self.synced           = False
-        self.dynamic          = True
-        self.show_ui          = SHOW_UI
-        self.lyrics_centered  = LYRICS_CENTERED
-        self.current_bold     = CURRENT_BOLD
-        self.current_uppercase= CURRENT_UPPERCASE
-        self.current_double   = CURRENT_DOUBLE
+        self.poller = playerctlpoller()
+        self.track = None
+        self.lyrics = []
+        self.synced = False
+        self.dynamic = True
+        self.show_ui = SHOW_UI
+        self.lyrics_centered = LYRICS_CENTERED
+        self.current_bold = CURRENT_BOLD
+        self.current_uppercase = CURRENT_UPPERCASE
+        self.current_double = CURRENT_DOUBLE
         self.current_standout = CURRENT_STANDOUT
-        self.inactive_dim     = INACTIVE_DIM
-        self.col_primary      = None
-        self.col_second       = None
-        self.offset           = SYNC_OFFSET
-        self.lock             = threading.Lock()
-        self.running          = True
-        self._last_id         = None
-        self.settings_open    = False
-        self.settings_cursor  = 0
-        self.tap_mode         = False
-        self.tap_times        = []
-        self.tap_lyric_idx    = []
+        self.inactive_dim = INACTIVE_DIM
+        self.col_primary = None
+        self.col_second = None
+        self.offset = SYNC_OFFSET
+        self.lock = threading.Lock()
+        self.running = True
+        self._last_id = None
         saved = load_settings()
         for k, v in saved.items():
             if hasattr(self, k):
@@ -198,8 +191,14 @@ class LyricSpot:
                 if t and t["track_id"] != self._last_id:
                     self._last_id = t["track_id"]
                     self.lyrics, self.synced = fetch_synced_lyrics(
-                        t["title"], t["artist"], t["album"], t["duration"])
-                    self.col_primary, self.col_second = palette_from_url(t["art_url"])
+                        t["title"],
+                        t["artist"],
+                        t["album"],
+                        t["duration"]
+                    )
+                    self.col_primary, self.col_second = palette_from_url(
+                        t["art_url"]
+                    )
             time.sleep(POLL_INTERVAL)
 
     def run(self):
@@ -209,13 +208,15 @@ class LyricSpot:
     def _apply_colors(self):
         if self.dynamic and self.col_primary is not None:
             fg_active = self.col_primary
-            fg_dim    = self.col_second if self.col_second else -1
+            fg_dim = self.col_second if self.col_second else -1
             fg_header = self.col_primary
         else:
             fg_active = fg_dim = fg_header = -1
         curses.init_pair(1, fg_active, -1)
-        curses.init_pair(2, fg_dim,    -1)
+        curses.init_pair(2, fg_dim, -1)
         curses.init_pair(3, fg_header, -1)
+        curses.init_pair(4, fg_header, -1) # filled pb
+        curses.init_pair(5, -1, -1) # unfilled pb
 
     def _place(self, text, w):
         if self.lyrics_centered:
@@ -223,37 +224,6 @@ class LyricSpot:
         else:
             x = 0
         return x, text[:max(1, w - x - 1)]
-
-    def _draw_settings(self, scr, h, w):
-        panel_w = 36
-        panel_h = len(SETTINGS) + 4
-        py = max(0, (h - panel_h) // 2)
-        px = max(0, (w - panel_w) // 2)
-
-        for row in range(panel_h):
-            self._safe_addstr(scr, py + row, px, " " * panel_w, curses.color_pair(3))
-
-        title = "  settings"
-        self._safe_addstr(scr, py,     px, title + " " * (panel_w - len(title)), curses.color_pair(3) | curses.A_BOLD)
-        self._safe_addstr(scr, py + 1, px, "  " + "─" * (panel_w - 4) + "  ",   curses.color_pair(3))
-
-        for i, (label, attr) in enumerate(SETTINGS):
-            val     = getattr(self, attr)
-            toggle  = "on " if val else "off"
-            row_y   = py + 2 + i
-            is_sel  = i == self.settings_cursor
-            prefix  = "  ▶ " if is_sel else "    "
-            text    = f"{prefix}{label:<22}{toggle}"
-            text    = text[:panel_w]
-            text   += " " * (panel_w - len(text))
-            a = curses.color_pair(3)
-            if is_sel: a |= curses.A_BOLD | curses.A_STANDOUT
-            self._safe_addstr(scr, row_y, px, text, a)
-
-        hint = "  space/enter: toggle   s: close"
-        hint = hint[:panel_w]
-        hint += " " * (panel_w - len(hint))
-        self._safe_addstr(scr, py + panel_h - 1, px, hint, curses.color_pair(3) | curses.A_DIM)
 
     def _main(self, scr):
         curses.curs_set(0)
@@ -263,91 +233,89 @@ class LyricSpot:
         scr.timeout(80)
         self._apply_colors()
 
-        last_palette = (None, None)
-
         while self.running:
             key = scr.getch()
+            if key in (ord("q"), ord("Q"), 27):
+                break
+            if key == curses.KEY_UP:
+                self.offset = round(self.offset + OFFSET_STEP, 2)
+                save_settings(self)
+            if key == curses.KEY_DOWN:
+                self.offset = round(self.offset - OFFSET_STEP, 2)
+                save_settings(self)
 
-            if self.settings_open:
-                if key in (ord('s'), ord('S'), 27):
-                    self.settings_open = False
-                elif key == curses.KEY_UP:
-                    self.settings_cursor = (self.settings_cursor - 1) % len(SETTINGS)
-                elif key == curses.KEY_DOWN:
-                    self.settings_cursor = (self.settings_cursor + 1) % len(SETTINGS)
-                elif key in (ord(' '), 10, 13, curses.KEY_ENTER):
-                    attr = SETTINGS[self.settings_cursor][1]
-                    setattr(self, attr, not getattr(self, attr))
-                    if attr == "dynamic":
-                        self._apply_colors()
-                    save_settings(self)
-            else:
-                if key in (ord('q'), ord('Q'), 27):
-                    self.running = False
-                    break
-                if key in (ord('s'), ord('S')):
-                    self.settings_open   = True
-                    self.settings_cursor = 0
-                if key == curses.KEY_UP or key == ord('+'):
-                    self.offset = round(self.offset + OFFSET_STEP, 2)
-                    save_settings(self)
-                if key == curses.KEY_DOWN or key == ord('-'):
-                    self.offset = round(self.offset - OFFSET_STEP, 2)
-                    save_settings(self)
-                if key in (ord('t'), ord('T')):
-                    self.tap_mode      = not self.tap_mode
-                    self.tap_times     = []
-                    self.tap_lyric_idx = []
-                if self.tap_mode and key == ord(' '):
-                    with self.lock:
-                        tr  = self.track
-                        lyr = list(self.lyrics)
-                        syn = self.synced
-                    if tr and syn:
-                        prog    = tr["progress"]
-                        cur_idx = 0
-                        for i, (ts, _) in enumerate(lyr):
-                            if ts <= prog + self.offset:
-                                cur_idx = i
-                        self.tap_times.append((time.time(), prog))
-                        self.tap_lyric_idx.append(cur_idx)
-                        if len(self.tap_times) >= 4:
-                            drifts = []
-                            for j in range(1, len(self.tap_times)):
-                                if self.tap_lyric_idx[j] != self.tap_lyric_idx[j-1]:
-                                    wall_dt  = self.tap_times[j][0] - self.tap_times[j-1][0]
-                                    lyric_dt = lyr[self.tap_lyric_idx[j]][0] - lyr[self.tap_lyric_idx[j-1]][0]
-                                    drifts.append(wall_dt - lyric_dt)
-                            if drifts:
-                                self.offset    = round(self.offset - sum(drifts)/len(drifts), 2)
-                                self.tap_mode  = False
-                                self.tap_times = []
-                                self.tap_lyric_idx = []
-                                save_settings(self)
-
-            with self.lock:
-                track   = self.track
-                lyrics  = list(self.lyrics)
-                synced  = self.synced
-                pal     = (self.col_primary, self.col_second)
-                offset  = self.offset
-
-            if pal != last_palette:
+            if key == ord("u"):
+                self.show_ui = not self.show_ui
+                save_settings(self)
+            if key == ord("c"):  
+                self.lyrics_centered = not self.lyrics_centered
+                save_settings(self)
+            if key == ord("d"): 
+                self.dynamic = not self.dynamic
                 self._apply_colors()
-                last_palette = pal
+                save_settings(self)
+            if key == ord("b"):
+                self.current_bold = not self.current_bold
+                save_settings(self)
+            if key == ord("U"): 
+                self.current_uppercase = not self.current_uppercase
+                save_settings(self)
+            if key == ord("i"): 
+                self.inactive_dim = not self.inactive_dim
+                save_settings(self)
+            
+            with self.lock:
+                track = self.track
+                lyrics = list(self.lyrics)
+                synced = self.synced
+                offset = self.offset
 
             h, w = scr.getmaxyx()
             scr.erase()
 
             if not track:
-                msg = "nothing playing on Spotify"
-                self._safe_addstr(scr, h//2, max(0,(w-len(msg))//2), msg,
-                                  curses.color_pair(2) | curses.A_DIM)
-                if self.settings_open:
-                    self._draw_settings(scr, h, w)
+                msg = "nothing playing"
+                scr.addstr(h // 2, max(0, (w - len(msg)) // 2), msg, curses.A_DIM)
                 scr.refresh()
                 time.sleep(0.4)
                 continue
+
+            if self.show_ui:
+                title_text = track['title']
+                artist_text = f" - {track['artist']}"
+                full_line = title_text + artist_text
+                
+                # truncate when needed
+                if len(full_line) > w - 28:
+                    available = w - 31
+                    if len(title_text) > available:
+                        title_text = title_text[:available] + "…"
+                        artist_text = ""
+                    else:
+                        artist_text = artist_text[:available - len(title_text)] + "…"
+
+                status = f"offset:{offset:+.2f}s  q:quit"
+                status_x = max(6, w - len(status) - 2)
+
+                dur = track["duration"]
+                prog = track["progress"]
+                bar_w = w - 4
+                filled = int(bar_w * min(prog / max(dur, 1), 1))
+                
+                bar_filled = "━" * filled
+                bar_unfilled = "━" * (bar_w - filled)
+
+                scr.addstr(0, 2, title_text, curses.color_pair(3) | curses.A_BOLD)
+                if artist_text:
+                    scr.addstr(0, 2 + len(title_text), artist_text, curses.color_pair(2) | curses.A_DIM)
+                scr.addstr(0, status_x, status, curses.color_pair(2) | curses.A_DIM)
+                scr.addstr(1, 2, bar_filled, curses.color_pair(4))
+                if bar_unfilled:
+                    scr.addstr(1, 2 + filled, bar_unfilled, curses.color_pair(5) | curses.A_DIM)
+
+                lyric_start = 2 + HEADER_MARGIN
+            else:
+                lyric_start = 0
 
             progress = track["progress"] + offset
             cur = 0
@@ -356,189 +324,48 @@ class LyricSpot:
                     if ts <= progress:
                         cur = i
 
-            if self.show_ui:
-                dur        = track["duration"]
-                prog       = track["progress"]
-                bar_w      = max(10, w - 22)
-                filled     = int(bar_w * min(prog / max(dur, 1), 1))
-                bar        = "─" * filled + "╸" + " " * (bar_w - filled)
-                time_str   = f"{int(prog)//60}:{int(prog)%60:02d} / {int(dur)//60}:{int(dur)%60:02d}"
-                hint       = f"[S] settings  [↑/↓] offset:{offset:+.2f}s  [Q] quit"
-
-                attr_h = curses.color_pair(3) | curses.A_BOLD
-                self._safe_addstr(scr, 0, 0, f" ♪  {track['title']}"[:w-1],  attr_h)
-                self._safe_addstr(scr, 1, 0, f"    {track['artist']}"[:w-1], curses.color_pair(2))
-                self._safe_addstr(scr, 2, 0, f" {bar} {time_str}"[:w-1],     curses.color_pair(2))
-                self._safe_addstr(scr, 3, max(0, w-len(hint)-1), hint[:w-1], curses.color_pair(2) | curses.A_DIM)
-                self._safe_addstr(scr, 4, 0, "─" * (w-1),                    curses.color_pair(2) | curses.A_DIM)
-                lyric_start = 5
-            else:
-                lyric_start = 0
-
             lyric_area = h - lyric_start
-            half       = lyric_area // 2
-            start      = max(0, cur - half)
-            end        = min(len(lyrics), start + lyric_area)
-            start      = max(0, end - lyric_area)
+            half = lyric_area // 2
+            start = max(0, cur - half)
+            end = min(len(lyrics), start + lyric_area)
+            start = max(0, end - lyric_area)
 
             row_i = 0
-            li    = start
-            while li < end:
-                ts, text   = lyrics[li]
+            li = start
+            while li < end and lyric_start + row_i < h - 1:
+                ts, text = lyrics[li]
                 screen_row = lyric_start + row_i
 
                 if li == cur:
                     label = text.upper() if self.current_uppercase else text
-                    line  = "  ▶  " + label
-                    attr  = curses.color_pair(1)
-                    if self.current_bold:     attr |= curses.A_BOLD
-                    if self.current_standout: attr |= curses.A_STANDOUT
-                    x, line = self._place(line, w)
-                    if self.current_double and screen_row < h - 2:
-                        self._safe_addstr(scr, screen_row,     x, line, attr)
-                        self._safe_addstr(scr, screen_row + 1, x, line, attr)
-                        row_i += 2
-                    else:
-                        self._safe_addstr(scr, screen_row, x, line, attr)
-                        row_i += 1
+                    line = f"  ▶ {label}"
+                    attr = curses.color_pair(1) | curses.A_BOLD
                 else:
-                    line = "     " + text
+                    line = f"    {text}"
                     attr = curses.color_pair(2)
-                    if self.inactive_dim: attr |= curses.A_DIM
-                    x, line = self._place(line, w)
-                    if screen_row < h - 1:
-                        self._safe_addstr(scr, screen_row, x, line, attr)
-                    row_i += 1
+                    if self.inactive_dim:
+                        attr |= curses.A_DIM
 
+                x, clipped = self._place(line, w)
+                scr.addstr(screen_row, x, clipped, attr)
+
+                row_i += 1
                 li += 1
-                if lyric_start + row_i >= h - 1:
-                    break
-
-            if self.settings_open:
-                self._draw_settings(scr, h, w)
-
-            if self.tap_mode:
-                self._draw_tap_overlay(scr, h, w)
 
             scr.refresh()
 
-    def _draw_tap_overlay(self, scr, h, w):
-        taps   = len(self.tap_times)
-        needed = max(0, 4 - taps)
-        lines  = [
-            "  tap sync",
-            "  " + "─" * 26,
-            "  tap space as lyrics change",
-            f"  taps: {taps}   need {needed} more",
-            "",
-            "  T: cancel",
-        ]
-        panel_w = 32
-        panel_h = len(lines) + 2
-        py = h - panel_h - 2
-        px = 2
-        for row in range(panel_h):
-            self._safe_addstr(scr, py + row, px, " " * panel_w, curses.color_pair(3))
-        for i, line in enumerate(lines):
-            text  = (line + " " * panel_w)[:panel_w]
-            attr  = curses.color_pair(3)
-            if i == 0: attr |= curses.A_BOLD
-            self._safe_addstr(scr, py + 1 + i, px, text, attr)
-
-    @staticmethod
-    def _safe_addstr(scr, y, x, text, attr=0):
-        try:
-            scr.addstr(y, x, text, attr)
-        except curses.error:
-            pass
-
-
-def detect_shell():
-    shell = os.environ.get("SHELL", "")
-    if "fish" in shell: return "fish"
-    if "zsh"  in shell: return "zsh"
-    return "bash"
-
-def get_shell_config(shell):
-    if shell == "fish": return os.path.expanduser("~/.config/fish/config.fish")
-    if shell == "zsh":  return os.path.expanduser("~/.zshrc")
-    return os.path.expanduser("~/.bashrc")
-
-def format_env_lines(shell, client_id, client_secret, redirect_uri):
-    if shell == "fish":
-        return (
-            f'set -x SPOTIPY_CLIENT_ID "{client_id}"\n'
-            f'set -x SPOTIPY_CLIENT_SECRET "{client_secret}"\n'
-            f'set -x SPOTIPY_REDIRECT_URI "{redirect_uri}"\n'
-        )
-    return (
-        f'export SPOTIPY_CLIENT_ID="{client_id}"\n'
-        f'export SPOTIPY_CLIENT_SECRET="{client_secret}"\n'
-        f'export SPOTIPY_REDIRECT_URI="{redirect_uri}"\n'
-    )
-
-def run_setup():
-    shell    = detect_shell()
-    config   = get_shell_config(shell)
-    redirect = "http://127.0.0.1:8888/callback"
-
-    print("╭─────────────────────────────────────────────────────────────╮")
-    print("│  lyricspot setup                                            │")
-    print("╰─────────────────────────────────────────────────────────────╯")
-    print()
-    print("  1. Go to https://developer.spotify.com/dashboard")
-    print("  2. Create an app")
-    print(f"  3. Add this redirect URI:  {redirect}")
-    print()
-
-    client_id     = input("  Paste your Client ID:      ").strip()
-    client_secret = input("  Paste your Client Secret:  ").strip()
-
-    if not client_id or not client_secret:
-        print("\n  nothing entered, exiting.")
-        return
-
-    with open(config, "a") as f:
-        f.write("\n# lyricspot\n")
-        f.write(format_env_lines(shell, client_id, client_secret, redirect))
-
-    print()
-    print(f"  saved to {config}  (detected shell: {shell})")
-    print()
-    if shell == "fish":
-        print("  reload with:  source ~/.config/fish/config.fish")
-    else:
-        print(f"  reload with:  source {config}")
-    print()
-    print("  then re-run lyricspot.")
-
-
 def main():
-    if not HAS_SPOTIPY:
-        print("✗  spotipy missing — run: pip install spotipy pillow colorthief")
-        sys.exit(1)
-
     if "--reset" in sys.argv:
         try:
             os.remove(CONFIG_FILE)
-            print("settings cleared.")
-
-        except FileNotFoundError:
-            print("nothing to clear.")
-        sys.exit(0)
-
-    if "--bugs" in sys.argv:
-        print("we've fixed", fixes, "bugs!")
-        sys.exit(0)
-
-    if CLIENT_ID == "YOUR_CLIENT_ID":
-        run_setup()
-        sys.exit(0)
-
+            print("settings cleared")
+        except:
+            print("nothing to clear")
+        return
     signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
-    sys.stderr = open(os.devnull, "w")
     LyricSpot().run()
-
 
 if __name__ == "__main__":
     main()
+
+
