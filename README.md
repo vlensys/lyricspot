@@ -18,6 +18,7 @@ ln -sf "$(pwd)/lyricspot.py" ~/.local/bin/lyricspot
 chmod +x lyricspot.py
 ```
 The bundled colorthief is optional, needed for dynamic colors.
+
 Make sure `~/.local/bin` is in your PATH. In fish:
 
 ```fish
