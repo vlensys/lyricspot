@@ -1,8 +1,7 @@
 # lyricspot
+A lightweight terminal tool that live-syncs song lyrics with whatever you’re playing. 
 <img width="2553" height="1561" alt="image" src="https://github.com/user-attachments/assets/73d9c495-fbc4-4c68-b75f-eecd7f2b09bc" />
 
-
-Live synced lyrics in your terminal for whatever is playing via MPRIS. Colors are extracted from the album art using the bundled `colorthief.py`. Nudge the lyric timing with arrow keys, toggle UI styles with `Y`.
 # install
 
 ### AUR
