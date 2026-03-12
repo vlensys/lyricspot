@@ -53,7 +53,7 @@ lyricspot
 | `c` | toggle centered lyrics |
 | `d` | toggle dynamic album colors |
 | `b` | toggle bold on current lyric |
-| `U` | toggle uppercase on current lyric |
+| `shift + u` | toggle uppercase on current lyric |
 | `i` | toggle dim on inactive lyrics |
 | `Q` / `Esc` | quit |
 
