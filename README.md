@@ -2,23 +2,6 @@
 
 Live synced lyrics in your terminal for whatever is playing via MPRIS. Colors are extracted from the album art using the bundled `colorthief.py`. Nudge the lyric timing with arrow keys, toggle UI styles with `Y`.
 
-```
-## dependencies
-
-- `playerctl` — reads your media player via MPRIS (mpv, vlc, cmus, etc.)
-- `colorthief.py` — bundled, no install needed
-
-That's it. No pip installs required.
-
-## install
-
-### AUR (Arch / Artix)
-
-```bash
-yay -S lyricspot
-# or
-paru -S lyricspot
-```
 
 ### manual
 
