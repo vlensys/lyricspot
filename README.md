@@ -1,78 +1,33 @@
 # lyricspot
 
-Live synced lyrics in your terminal, pulled from whatever is playing on Spotify. Colors are extracted from the album art. Toggle to your terminal's native palette with `Y`, nudge the lyric timing with arrow keys.
+Live synced lyrics in your terminal for whatever is playing via MPRIS. Colors are extracted from the album art using the bundled `colorthief.py`. Nudge the lyric timing with arrow keys, toggle UI styles with `Y`.
 
 ```
- ♪  DRUGS IN HER ROOM
-    Yabujin
- ────────────────────────────────────────────────────────────────────╸                  0:53 / 1:05
-                                                               [S] settings  [↑/↓] offset:+1.15s  [Q] quit
-──────────────────────────────────────────────────────────────────────────────────────────────────────────
-                                                 (Ha-ha-ha-ha)
-                                                        
-                                               Heaven in her eyes
-                                           She's an angel in disguise
-                                           Saw a rainbow in her room
-                                          Love stories will drop soon
-                                               Heaven in her eyes
-                                           She's an angel in disguise
-                                           Saw a rainbow in her room
-                                          Love stories will drop soon
-                           Even you're still searchin', stop, just give me the source
-                               Oh baby, don't love me now, I don't need no words
-                           Even you're still searchin', stop, just give me the source
-                            ▶  OH BABY, DON'T LOVE ME NOW, I DON'T NEED NO WORDS
-                                                                                                               
-```
-
 ## dependencies
 
-```bash
-python -m venv ~/.venv/lyricspot
-source ~/.venv/lyricspot/bin/activate.fish  # fish
-# source ~/.venv/lyricspot/bin/activate     # bash/zsh
-pip install spotipy pillow colorthief
-```
+- `playerctl` — reads your media player via MPRIS (mpv, vlc, cmus, etc.)
+- `colorthief.py` — bundled, no install needed
 
-`pillow` and `colorthief` are optional. Without them dynamic colors are disabled.
+That's it. No pip installs required.
 
-## spotify setup
+## install
 
-1. Go to [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard)
-2. Create an app
-3. In app settings add this redirect URI: `http://127.0.0.1:8888/callback`
-4. Run the script once with no credentials set and it will walk you through the rest
-
-On first run lyricspot detects your shell, asks for your Client ID and Secret, and writes the correct export syntax directly to your config file (`config.fish`, `.zshrc`, or `.bashrc`). After that, reload your config and run again.
-
-## running
-
-The cleanest way is a small launcher script so you never have to activate the venv manually:
+### AUR (Arch / Artix)
 
 ```bash
-echo '#!/bin/bash' > run.sh
-echo 'VENV="$HOME/.venv/lyricspot/bin/python"' >> run.sh
-echo 'SCRIPT="$(realpath "$0" | xargs dirname)/lyricspot.py"' >> run.sh
-echo '"$VENV" "$SCRIPT"' >> run.sh
-chmod +x run.sh
-ln -sf (pwd)/run.sh ~/.local/bin/lyricspot
-```
-
-Then just run:
-
-```bash
-lyricspot
-```
-
-Alternatively, if you are on an arch-based distro you can download it straight from the AUR 
-```
-# for yay
 yay -S lyricspot
-# or maybe for paru
+# or
 paru -S lyricspot
 ```
-(please note that ive only tested this with arch and artix. (please report issues in... issues)
 
+### manual
+
+```bash
+git clone https://github.com/vlensys/lyricspot
+cd lyricspot
+ln -sf "$(pwd)/lyricspot.py" ~/.local/bin/lyricspot
+chmod +x lyricspot.py
+```
 
 Make sure `~/.local/bin` is in your PATH. In fish:
 
@@ -80,15 +35,38 @@ Make sure `~/.local/bin` is in your PATH. In fish:
 fish_add_path ~/.local/bin
 ```
 
+## running
+
+```bash
+lyricspot
+```
+
 ## controls
 
 | key | action |
 |-----|--------|
-| `Y` | toggle dynamic album colors / terminal colors |
-| `↑` or `+` | shift lyrics forward 0.25s |
-| `↓` or `-` | shift lyrics back 0.25s |
+| `Y` | toggle UI style (minimal / classic) |
+| `↑` / `↓` | shift lyrics ±0.25s |
+| `u` | toggle header UI |
+| `c` | toggle centered lyrics |
+| `d` | toggle dynamic album colors |
+| `b` | toggle bold on current lyric |
+| `U` | toggle uppercase on current lyric |
+| `i` | toggle dim on inactive lyrics |
 | `Q` / `Esc` | quit |
 
 ## tuning
 
-If lyrics feel ahead or behind, use `↑` and `↓` while the song is playing to dial in the offset live. The current value shows in the top right of the UI. To make a new default permanent, change `SYNC_OFFSET` at the top of `lyricspot.py`.
+If lyrics feel ahead or behind, use `↑` and `↓` while the song is playing. The offset shows live in the top right. Settings persist across sessions in `~/.config/lyricspot/settings.json`.
+
+To reset all settings:
+
+```bash
+lyricspot --reset
+```
+
+## notes
+
+- Works with any MPRIS-compatible player: mpv, vlc, cmus, rhythmbox, etc.
+- Lyrics are fetched from [lrclib.net](https://lrclib.net)
+- Tested on Arch and Artix. Report issues in [issues](https://github.com/vlensys/lyricspot/issues).
