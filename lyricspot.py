@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-__version__ = "1.2.1SR"
+# lyricspot - live synced lyrics in your terminal
+# Copyright (C) 2026 vlensys
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+# See <https://www.gnu.org/licenses/> for details.
+__version__ = "1.3.0"
 
 import os
 import sys
@@ -162,6 +169,7 @@ class playerctlpoller:
             "progress": pos,
             "art_url": art_url,
             "track_id": track_id,
+            "status": status,
         }
 
 class LyricSpot:
@@ -186,6 +194,7 @@ class LyricSpot:
         self._last_id = None
         self.ui_style = "minimal"
         self._recolor = False
+        self._fetching = False
         saved = load_settings()
         for k, v in saved.items():
             if hasattr(self, k):
@@ -199,12 +208,14 @@ class LyricSpot:
                 track_key = (t["track_id"], t["title"], t["artist"]) if t else None
                 if t and track_key != self._last_id:
                     self._last_id = track_key
+                    self._fetching = True
                     self.lyrics, self.synced = fetch_synced_lyrics(
                         t["title"],
                         t["artist"],
                         t["album"],
                         t["duration"]
                     )
+                    self._fetching = False
                     self.col_primary, self.col_second = palette_from_url(
                         t["art_url"]
                     )
@@ -227,6 +238,7 @@ class LyricSpot:
         curses.init_pair(3, fg_header, -1)
         curses.init_pair(4, fg_header, -1) # filled pb
         curses.init_pair(5, -1, -1) # unfilled pb
+        curses.init_pair(6, fg_dim, -1)  # past lyrics
 
     def _place(self, text, w):
         if self.lyrics_centered:
@@ -296,11 +308,20 @@ class LyricSpot:
                 time.sleep(0.4)
                 continue
 
+            if self._fetching:
+                msg = "fetching lyrics..."
+                scr.addstr(h // 2, max(0, (w - len(msg)) // 2), msg, curses.A_DIM)
+                scr.refresh()
+                continue
+
+            is_paused = track.get("status") == "Paused"
+
             if self.show_ui:
                 dur  = track["duration"]
                 prog = track["progress"]
                 if self.ui_style == "minimal":
-                    title_text  = track['title']
+                    pause_prefix = "⏸  " if is_paused else ""
+                    title_text  = pause_prefix + track['title']
                     artist_text = f" - {track['artist']}"
                     if len(title_text + artist_text) > w - 28:
                         available = w - 31
@@ -331,7 +352,8 @@ class LyricSpot:
                     time_str = f"{int(prog)//60}:{int(prog)%60:02d} / {int(dur)//60}:{int(dur)%60:02d}"
                     hint     = f"[↑/↓] offset:{offset:+.2f}s  [Q] quit"
                     try:
-                        scr.addstr(0, 0, f" ♪  {track['title']}"[:w-1],  curses.color_pair(3) | curses.A_BOLD)
+                        prefix = " ⏸  " if is_paused else " ♪  "
+                        scr.addstr(0, 0, f"{prefix}{track['title']}"[:w-1],  curses.color_pair(3) | curses.A_BOLD)
                         scr.addstr(1, 0, f"    {track['artist']}"[:w-1], curses.color_pair(2))
                         scr.addstr(2, 0, f" {bar} {time_str}"[:w-1],     curses.color_pair(2))
                         scr.addstr(3, max(0, w-len(hint)-1), hint[:w-1], curses.color_pair(2) | curses.A_DIM)
@@ -367,11 +389,14 @@ class LyricSpot:
                     attr = curses.color_pair(1)
                     if self.current_bold:
                         attr |= curses.A_BOLD
+                elif li < cur:
+                    # past lyrics: always dim
+                    line = f"    {text}"
+                    attr = curses.color_pair(6) | curses.A_DIM
                 else:
+                    # future lyrics: never dim, slightly brighter
                     line = f"    {text}"
                     attr = curses.color_pair(2)
-                    if self.inactive_dim:
-                        attr |= curses.A_DIM
 
                 x, clipped = self._place(line, w)
                 scr.addstr(screen_row, x, clipped, attr)
