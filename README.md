@@ -4,6 +4,14 @@ A lightweight terminal tool that live-syncs song lyrics with whatever you’re p
 
 # install
 
+### dependencies
+```
+# arch/arch based
+pacman -S playerctl
+# nix os
+nix-env -iA nixpkgs.playerctl
+```
+
 ### AUR
 ```
 # just install from the AUR!
