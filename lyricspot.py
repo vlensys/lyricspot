@@ -20,6 +20,7 @@ import re
 import subprocess
 import curses
 import argparse
+import hashlib
 import argparse
 import argparse
 import argparse
@@ -157,8 +158,8 @@ class LyricSpot:
 
     def _fetch_lyrics(self, title, artist, album="", duration=0):
         os.makedirs(CACHE_DIR, exist_ok=True)
-        key        = re.sub(r"[^\w]+", "_", f"{artist}_{title}").strip("_").lower()
-        cache_file = os.path.join(CACHE_DIR, f"{key}.json")
+        cache_key  = hashlib.md5(f"{title.lower()}|{artist.lower()}".encode()).hexdigest()[:16]
+        cache_file = os.path.join(CACHE_DIR, f"{cache_key}.json")
 
         # try cache first
         try:
@@ -274,17 +275,22 @@ class LyricSpot:
                 self.track = t
                 track_key  = (t["track_id"], t["title"], t["artist"]) if t else None
                 if t and track_key != self._last_id:
-                    self._last_id  = track_key
-                    self._fetching = True
-                    self.lyrics, self.synced = self._fetch_lyrics(
-                        t["title"], t["artist"], t["album"], t["duration"]
-                    )
-                    self._fetching = False
-                    threading.Thread(
-                        target=self._fetch_colors,
-                        args=(t["art_url"],),
-                        daemon=True
-                    ).start()
+                    self._last_id      = track_key
+                    self.lyrics        = [(0, "fetching lyrics...")]
+                    self.synced        = False
+                    self._fetching     = True
+                    t_copy = t.copy()
+                    def _do_fetch(t=t_copy, key=track_key):
+                        lyrics, synced = self._fetch_lyrics(
+                            t["title"], t["artist"], t["album"], t["duration"]
+                        )
+                        with self.lock:
+                            if self._last_id == key:
+                                self.lyrics    = lyrics
+                                self.synced    = synced
+                                self._fetching = False
+                        self._fetch_colors(t["art_url"])
+                    threading.Thread(target=_do_fetch, daemon=True).start()
             time.sleep(POLL_INTERVAL)
 
     def _get_current_lyric(self, progress):
@@ -624,11 +630,10 @@ class LyricSpot:
             fg_dim    = self.col_second if self.col_second else -1
             fg_header = self.col_primary
         else:
-            term      = os.getenv("TERM", "").lower()
-            bright    = 231 if ("kitty" in term or "alacritty" in term) else 255
-            fg_active = bright
-            fg_dim    = 252
-            fg_header = bright
+            # use 256-color white; some terminals cap at 231
+            fg_active = 255 if curses.COLORS >= 256 else curses.COLOR_WHITE
+            fg_dim    = 250 if curses.COLORS >= 256 else curses.COLOR_WHITE
+            fg_header = fg_active
 
         curses.init_pair(1, fg_active, -1)  # current lyric (standout handles highlight)
         curses.init_pair(2, fg_dim,    -1)  # future dist 1
@@ -803,10 +808,18 @@ class LyricSpot:
                     attr  = curses.color_pair(1) | curses.A_BOLD
                 elif dist > 0:
                     line = f"    {text}"
-                    attr = curses.color_pair(2 if dist == 1 else 3 if dist <= 3 else 4) if self.inactive_dim else curses.color_pair(1)
+                    if self.inactive_dim:
+                        pair = 2 + min(dist - 1, 2)
+                        attr = curses.color_pair(pair)
+                    else:
+                        attr = curses.color_pair(1)
                 else:
                     line = f"    {text}"
-                    attr = curses.color_pair(5 if dist == -1 else 6 if dist >= -3 else 7) if self.inactive_dim else curses.color_pair(1)
+                    if self.inactive_dim:
+                        pair = 5 + min(abs(dist) - 1, 2)
+                        attr = curses.color_pair(pair)
+                    else:
+                        attr = curses.color_pair(1)
 
                 x, clipped = self._place(line, w)
                 scr.addstr(lyric_start + row, x, clipped, attr)
