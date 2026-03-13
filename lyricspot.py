@@ -29,7 +29,7 @@ except ImportError:
     HAS_COLOR = False
 
 LRCLIB_URL = "https://lrclib.net/api/get"
-POLL_INTERVAL = 0.5 # smoother :3
+POLL_INTERVAL = 0.2 # smoother :3
 SYNC_OFFSET = 0.0
 OFFSET_STEP = 0.25
 LYRICS_CENTERED = True
