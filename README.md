@@ -74,3 +74,5 @@ lyricspot --reset
 - Works with any MPRIS-compatible player: mpv, vlc, cmus, rhythmbox, etc.
 - Lyrics are fetched from [lrclib.net](https://lrclib.net)
 - Tested on Arch and Artix. Report issues in [issues](https://github.com/vlensys/lyricspot/issues).
+  
+*i put my hand over the stove to see if i stil bleed*
