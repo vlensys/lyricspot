@@ -6,9 +6,10 @@
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 # See <https://www.gnu.org/licenses/> for details.
-#
-# angel in disguise, baby, what'd you rather do?
-__version__ = "1.4.0"
+
+# i really do like you!
+
+__version__ = "1.5.0"
 
 import os
 import sys
@@ -26,7 +27,7 @@ try:
     import colorthief as _lsct
     HAS_COLOR = True
 except ImportError:
-    print("lsct (https://github.com/vlensys/lyricspot/blob/main/colorthief.py) not installed, proceeding without dynamic colors :(")
+    print("lsct (https://github.com/vlensys/lyricspot/blob/main/colorthief.py) not installed, proceeding without dynamic colors")
     HAS_COLOR = False
 
 LRCLIB_URL    = "https://lrclib.net/api/get"
@@ -42,7 +43,7 @@ SETTINGS_KEYS = [
     "inactive_dim", "dynamic", "offset", "ui_style",
 ]
 
-_IDLE_MSG = "nothing playing, or maybe player ctl is broken. that'd be bad :("
+_IDLE_MSG = "nothing playing"
 
 def load_settings():
     try:
@@ -169,13 +170,12 @@ class LyricSpot:
             try: os.remove(cache_file)
             except: pass
 
-        # fetch from lrclib
+        # lrclib /api/get
         p = {"track_name": title, "artist_name": artist, "album_name": album}
         if duration:
             p["duration"] = int(duration)
-        params = urllib.parse.urlencode(p)
         try:
-            with urllib.request.urlopen(f"{LRCLIB_URL}?{params}", timeout=6) as req:
+            with urllib.request.urlopen(f"{LRCLIB_URL}?{urllib.parse.urlencode(p)}", timeout=6) as req:
                 data = json.loads(req.read())
             if synced_lyrics := data.get("syncedLyrics"):
                 with open(cache_file, "w") as f:
@@ -185,6 +185,56 @@ class LyricSpot:
                 with open(cache_file, "w") as f:
                     json.dump({"synced": False, "lyrics": plain}, f)
                 return [(0, l) for l in plain.splitlines()], False
+        except:
+            pass
+
+        # lrclib /api/search
+        try:
+            search_params = urllib.parse.urlencode({"q": f"{artist} {title}"})
+            with urllib.request.urlopen(f"https://lrclib.net/api/search?{search_params}", timeout=6) as req:
+                results = json.loads(req.read())
+            # because sync tastes better than plain
+            synced_result = next((r for r in results if r.get("syncedLyrics")), None)
+            plain_result  = next((r for r in results if r.get("plainLyrics")), None)
+            if synced_result:
+                sl = synced_result["syncedLyrics"]
+                with open(cache_file, "w") as f:
+                    json.dump({"synced": True, "lyrics": sl}, f)
+                return self._parse_lrc(sl), True
+            if plain_result:
+                pl = plain_result["plainLyrics"]
+                with open(cache_file, "w") as f:
+                    json.dump({"synced": False, "lyrics": pl}, f)
+                return [(0, l) for l in pl.splitlines()], False
+        except:
+            pass
+
+        # try netease if everything else fails
+        try:
+            # track search
+            ne_search = urllib.parse.urlencode({"s": f"{artist} {title}", "type": 1, "limit": 5})
+            req = urllib.request.Request(
+                f"https://music.163.com/api/search/get?{ne_search}",
+                headers={"User-Agent": "Mozilla/5.0", "Referer": "https://music.163.com"}
+            )
+            with urllib.request.urlopen(req, timeout=6) as r:
+                ne_data = json.loads(r.read())
+            songs = ne_data.get("result", {}).get("songs", [])
+            if songs:
+                song_id = songs[0]["id"]
+                lrc_req = urllib.request.Request(
+                    f"https://music.163.com/api/song/lyric?id={song_id}&lv=1&kv=1&tv=-1",
+                    headers={"User-Agent": "Mozilla/5.0", "Referer": "https://music.163.com"}
+                )
+                with urllib.request.urlopen(lrc_req, timeout=6) as r:
+                    lrc_data = json.loads(r.read())
+                lrc_text = lrc_data.get("lrc", {}).get("lyric", "")
+                if lrc_text and not lrc_text.strip().startswith("//"):
+                    parsed = self._parse_lrc(lrc_text)
+                    if parsed:
+                        with open(cache_file, "w") as f:
+                            json.dump({"synced": True, "lyrics": lrc_text}, f)
+                        return parsed, True
         except:
             pass
 
@@ -199,6 +249,20 @@ class LyricSpot:
                 lines.append((t, text))
         return sorted(lines)
 
+    def _fetch_colors(self, url):
+        primary, second = palette_from_url(url)
+        with self.lock:
+            self.col_primary = primary
+            self.col_second  = second
+            self._recolor    = True
+
+    def _fetch_colors(self, url):
+        primary, second = palette_from_url(url)
+        with self.lock:
+            self.col_primary = primary
+            self.col_second  = second
+            self._recolor    = True
+
     def _poll(self):
         while self.running:
             t = self.poller.now_playing()
@@ -212,8 +276,11 @@ class LyricSpot:
                         t["title"], t["artist"], t["album"], t["duration"]
                     )
                     self._fetching = False
-                    self.col_primary, self.col_second = palette_from_url(t["art_url"])
-                    self._recolor = True
+                    threading.Thread(
+                        target=self._fetch_colors,
+                        args=(t["art_url"],),
+                        daemon=True
+                    ).start()
             time.sleep(POLL_INTERVAL)
 
     def run(self):
@@ -422,6 +489,17 @@ class LyricSpot:
 
 
 def main():
+    if "--version" in sys.argv or "-v" in sys.argv:
+        print(f"lyricspot {__version__}")
+        return
+    if "--help" in sys.argv or "-h" in sys.argv:
+        print("usage: lyricspot [--reset] [--version]")
+        print()
+        print("args:")
+        print("[--reset] resets your cache")
+        print("[--version] prints your version")
+
+        return
     if "--reset" in sys.argv:
         try:
             os.remove(CONFIG_FILE)
