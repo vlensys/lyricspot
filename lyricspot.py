@@ -26,11 +26,11 @@ try:
     import colorthief as _lsct
     HAS_COLOR = True
 except ImportError:
-    print("lsct (https://github.com/vlensys/lyricspot/blob/main/colorthief.py) not installed, proceeding without dynamic colors")
+    print("lsct (https://github.com/vlensys/lyricspot/blob/main/colorthief.py) not installed, proceeding without dynamic colors :(")
     HAS_COLOR = False
 
 LRCLIB_URL    = "https://lrclib.net/api/get"
-POLL_INTERVAL = 0.15
+POLL_INTERVAL = 0.3
 OFFSET_STEP   = 0.25
 
 CONFIG_DIR  = os.path.expanduser("~/.config/lyricspot")
