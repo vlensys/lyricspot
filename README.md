@@ -76,3 +76,4 @@ lyricspot --reset
 - Tested on Arch and Artix. Report issues in [issues](https://github.com/vlensys/lyricspot/issues).
   
 *i put my hand over the stove to see if i stil bleed*
+*creds to snoowfall for the gradient*
