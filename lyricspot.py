@@ -6,10 +6,7 @@
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 # See <https://www.gnu.org/licenses/> for details.
-
-# i really do like you!
-
-__version__ = "1.5.0"
+__version__ = "1.4.0"
 
 import os
 import sys
@@ -22,6 +19,13 @@ import json
 import re
 import subprocess
 import curses
+import argparse
+import argparse
+import argparse
+import argparse
+import argparse
+import argparse
+import argparse
 
 try:
     import colorthief as _lsct
@@ -170,7 +174,7 @@ class LyricSpot:
             try: os.remove(cache_file)
             except: pass
 
-        # lrclib /api/get
+        # fetch from lrclib
         p = {"track_name": title, "artist_name": artist, "album_name": album}
         if duration:
             p["duration"] = int(duration)
@@ -188,12 +192,12 @@ class LyricSpot:
         except:
             pass
 
-        # lrclib /api/search
+        # yeah fetch from there again but do it differently now
         try:
             search_params = urllib.parse.urlencode({"q": f"{artist} {title}"})
             with urllib.request.urlopen(f"https://lrclib.net/api/search?{search_params}", timeout=6) as req:
                 results = json.loads(req.read())
-            # because sync tastes better than plain
+            # because synced tastes better than plain
             synced_result = next((r for r in results if r.get("syncedLyrics")), None)
             plain_result  = next((r for r in results if r.get("plainLyrics")), None)
             if synced_result:
@@ -209,9 +213,9 @@ class LyricSpot:
         except:
             pass
 
-        # try netease if everything else fails
+        # netease is usually grumpy 
         try:
-            # track search
+            # search for track id
             ne_search = urllib.parse.urlencode({"s": f"{artist} {title}", "type": 1, "limit": 5})
             req = urllib.request.Request(
                 f"https://music.163.com/api/search/get?{ne_search}",
@@ -283,6 +287,328 @@ class LyricSpot:
                     ).start()
             time.sleep(POLL_INTERVAL)
 
+    def _get_current_lyric(self, progress):
+        if not self.lyrics:
+            return "no lyrics"
+        if not self.synced:
+            return " | ".join(text for _, text in self.lyrics) or "no lyrics"
+        current = ""
+        for ts, text in self.lyrics:
+            if ts > progress:
+                break
+            current = text
+        return current.strip() or ""
+
+    def run_output_mode(self, live=False):
+        track = self.poller.now_playing()
+        if not track:
+            print("nothing playing", file=sys.stderr)
+            sys.exit(1)
+        self.lyrics, self.synced = self._fetch_lyrics(
+            track["title"], track["artist"], track["album"], track["duration"]
+        )
+        if live:
+            last_line = None
+            try:
+                while True:
+                    track = self.poller.now_playing()
+                    if not track:
+                        if last_line is not None:
+                            print("nothing playing")
+                            sys.stdout.flush()
+                            last_line = None
+                        time.sleep(2)
+                        continue
+                    progress = track["progress"] + self.offset
+                    current  = self._get_current_lyric(progress)
+                    if current != last_line:
+                        print(current)
+                        sys.stdout.flush()
+                        last_line = current
+                    time.sleep(0.5)
+            except KeyboardInterrupt:
+                pass
+        else:
+            progress = track["progress"] + self.offset
+            print(self._get_current_lyric(progress))
+
+    def _get_current_lyric(self, progress):
+        if not self.lyrics:
+            return "no lyrics"
+        if not self.synced:
+            return " | ".join(text for _, text in self.lyrics) or "no lyrics"
+        current = "♪"
+        for ts, text in self.lyrics:
+            if ts > progress:
+                break
+            current = text
+        return current.strip() or "♪"
+
+    def run_output(self, live=False):
+        track = self.poller.now_playing()
+        if not track:
+            print("who really listens to deathmetal", file=sys.stderr)
+            sys.exit(1)
+        self.lyrics, self.synced = self._fetch_lyrics(
+            track["title"], track["artist"], track["album"], track["duration"]
+        )
+        if live:
+            last_line = None
+            try:
+                while True:
+                    track = self.poller.now_playing()
+                    if not track:
+                        if last_line is not None:
+                            print("nothing playing")
+                            sys.stdout.flush()
+                            last_line = None
+                        time.sleep(2)
+                        continue
+                    progress = track["progress"] + self.offset
+                    current  = self._get_current_lyric(progress)
+                    if current != last_line:
+                        print(current)
+                        sys.stdout.flush()
+                        last_line = current
+                    time.sleep(0.8)
+            except KeyboardInterrupt:
+                pass
+        else:
+            progress = track["progress"] + self.offset
+            print(self._get_current_lyric(progress))
+
+    def _get_current_lyric(self, progress):
+        if not self.lyrics:
+            return "no lyrics"
+        if not self.synced:
+            return " | ".join(text for _, text in self.lyrics) or "no lyrics :("
+        current = "♪"
+        for ts, text in self.lyrics:
+            if ts > progress:
+                break
+            current = text
+        return current.strip() or "♪"
+
+    def run_output(self, live=False):
+        track = self.poller.now_playing()
+        if not track:
+            print("nothing playing", file=sys.stderr)
+            sys.exit(1)
+        self.lyrics, self.synced = self._fetch_lyrics(
+            track["title"], track["artist"], track["album"], track["duration"]
+        )
+        if live:
+            last_line = None
+            try:
+                while True:
+                    track = self.poller.now_playing()
+                    if not track:
+                        if last_line is not None:
+                            print("nothing playing")
+                            sys.stdout.flush()
+                            last_line = None
+                        time.sleep(2)
+                        continue
+                    progress = track["progress"] + self.offset
+                    current  = self._get_current_lyric(progress)
+                    if current != last_line:
+                        print(current)
+                        sys.stdout.flush()
+                        last_line = current
+                    time.sleep(0.8)
+            except KeyboardInterrupt:
+                pass
+        else:
+            progress = track["progress"] + self.offset
+            print(self._get_current_lyric(progress))
+
+    def _get_current_lyric(self, progress):
+        if not self.lyrics:
+            return ""
+        if not self.synced:
+            return " | ".join(text for _, text in self.lyrics) or ""
+        current = ""
+        for ts, text in self.lyrics:
+            if ts > progress:
+                break
+            current = text
+        return current.strip() or ""
+
+    def run_output_mode(self, live=False):
+        track = self.poller.now_playing()
+        if not track:
+            print("nothing playing", file=sys.stderr)
+            sys.exit(1)
+        self.lyrics, self.synced = self._fetch_lyrics(
+            track["title"], track["artist"], track["album"], track["duration"]
+        )
+        if live:
+            last_line = None
+            try:
+                while True:
+                    track = self.poller.now_playing()
+                    if not track:
+                        if last_line is not None:
+                            print("nothing playing")
+                            sys.stdout.flush()
+                            last_line = None
+                        time.sleep(2)
+                        continue
+                    progress = track["progress"] + self.offset
+                    current  = self._get_current_lyric(progress)
+                    if current != last_line:
+                        print(current)
+                        sys.stdout.flush()
+                        last_line = current
+                    time.sleep(0.8)
+            except KeyboardInterrupt:
+                pass
+        else:
+            progress = track["progress"] + self.offset
+            print(self._get_current_lyric(progress))
+
+    def _get_current_lyric(self, progress):
+        if not self.lyrics:
+            return "no lyrics"
+        if not self.synced:
+            return " | ".join(text for _, text in self.lyrics) or "no lyrics"
+        current = "♪"
+        for ts, text in self.lyrics:
+            if ts > progress:
+                break
+            current = text
+        return current.strip() or "♪"
+
+    def run_output(self, live=False):
+        track = self.poller.now_playing()
+        if not track:
+            print("nothing playing", file=sys.stderr)
+            sys.exit(1)
+        self.lyrics, self.synced = self._fetch_lyrics(
+            track["title"], track["artist"], track["album"], track["duration"]
+        )
+        if live:
+            last_line = None
+            try:
+                while True:
+                    track = self.poller.now_playing()
+                    if not track:
+                        if last_line is not None:
+                            print("nothing playing")
+                            sys.stdout.flush()
+                            last_line = None
+                        time.sleep(2)
+                        continue
+                    # refetch if song changed
+                    track_key = (track["track_id"], track["title"], track["artist"])
+                    if track_key != self._last_id:
+                        self._last_id = track_key
+                        self.lyrics, self.synced = self._fetch_lyrics(
+                            track["title"], track["artist"], track["album"], track["duration"]
+                        )
+                    progress = track["progress"] + self.offset
+                    current  = self._get_current_lyric(progress)
+                    if current != last_line:
+                        print(current)
+                        sys.stdout.flush()
+                        last_line = current
+                    time.sleep(0.5)
+            except KeyboardInterrupt:
+                pass
+        else:
+            progress = track["progress"] + self.offset
+            print(self._get_current_lyric(progress))
+
+    def _get_current_lyric(self, progress):
+        if not self.lyrics:
+            return ""
+        if not self.synced:
+            return " | ".join(text for _, text in self.lyrics) or ""
+        current = ""
+        for ts, text in self.lyrics:
+            if ts > progress:
+                break
+            current = text
+        return current.strip() or "·"
+
+    def run_output(self, live=False):
+        track = self.poller.now_playing()
+        if not track:
+            print("nothing playing", file=sys.stderr)
+            sys.exit(1)
+        self.lyrics, self.synced = self._fetch_lyrics(
+            track["title"], track["artist"], track["album"], track["duration"]
+        )
+        if live:
+            last_line = None
+            try:
+                while True:
+                    track = self.poller.now_playing()
+                    if not track:
+                        if last_line is not None:
+                            print("nothing playing")
+                            sys.stdout.flush()
+                            last_line = None
+                        time.sleep(2)
+                        continue
+                    progress = track["progress"] + self.offset
+                    current  = self._get_current_lyric(progress)
+                    if current != last_line:
+                        print(current)
+                        sys.stdout.flush()
+                        last_line = current
+                    time.sleep(0.8)
+            except KeyboardInterrupt:
+                pass
+        else:
+            progress = track["progress"] + self.offset
+            print(self._get_current_lyric(progress))
+
+    def _get_current_lyric(self, progress):
+        if not self.lyrics:
+            return "no lyrics"
+        if not self.synced:
+            return " | ".join(text for _, text in self.lyrics) or "no lyrics"
+        current = "♪"
+        for ts, text in self.lyrics:
+            if ts > progress:
+                break
+            current = text
+        return current.strip() or "♪"
+
+    def run_output(self, live=False):
+        track = self.poller.now_playing()
+        if not track:
+            print("nothing playing", file=sys.stderr)
+            sys.exit(1)
+        self.lyrics, self.synced = self._fetch_lyrics(
+            track["title"], track["artist"], track["album"], track["duration"]
+        )
+        if live:
+            last_line = None
+            try:
+                while True:
+                    track = self.poller.now_playing()
+                    if not track:
+                        if last_line is not None:
+                            print("nothing playing")
+                            sys.stdout.flush()
+                            last_line = None
+                        time.sleep(2)
+                        continue
+                    progress = track["progress"] + self.offset
+                    current  = self._get_current_lyric(progress)
+                    if current != last_line:
+                        print(current)
+                        sys.stdout.flush()
+                        last_line = current
+                    time.sleep(0.8)
+            except KeyboardInterrupt:
+                pass
+        else:
+            progress = track["progress"] + self.offset
+            print(self._get_current_lyric(progress))
+
     def run(self):
         threading.Thread(target=self._poll, daemon=True).start()
         curses.wrapper(self._main)
@@ -308,9 +634,9 @@ class LyricSpot:
         curses.init_pair(2, fg_dim,    -1)  # future dist 1
         curses.init_pair(3, 249,       -1)  # future dist 2-3
         curses.init_pair(4, 245,       -1)  # future dist 4+
-        curses.init_pair(5, 240,       -1)  # past dist -1
-        curses.init_pair(6, 238,       -1)  # past dist -2 to -3
-        curses.init_pair(7, 236,       -1)  # past dist -4+
+        curses.init_pair(5, 244,       -1)  # past dist -1
+        curses.init_pair(6, 242,       -1)  # past dist -2 to -3
+        curses.init_pair(7, 240,       -1)  # past dist -4+
         curses.init_pair(8, fg_header, -1)  # header / progress bar
 
     def _place(self, text, w):
@@ -381,7 +707,7 @@ class LyricSpot:
                 continue
 
             if self._fetching:
-                msg = "fetching lyrics..."
+                msg = "great things are currently fetching!"
                 scr.addstr(h // 2, max(0, (w - len(msg)) // 2), msg, curses.A_DIM)
                 scr.refresh()
                 continue
@@ -474,13 +800,13 @@ class LyricSpot:
                 elif dist == 0:
                     label = text.upper() if self.current_uppercase else text
                     line  = f"  ▶ {label}"
-                    attr  = curses.color_pair(1) | (curses.A_BOLD if self.current_bold else 0)
+                    attr  = curses.color_pair(1) | curses.A_BOLD
                 elif dist > 0:
                     line = f"    {text}"
-                    attr = curses.color_pair(2 if dist == 1 else 3 if dist <= 3 else 4)
+                    attr = curses.color_pair(2 if dist == 1 else 3 if dist <= 3 else 4) if self.inactive_dim else curses.color_pair(1)
                 else:
                     line = f"    {text}"
-                    attr = curses.color_pair(5 if dist == -1 else 6 if dist >= -3 else 7)
+                    attr = curses.color_pair(5 if dist == -1 else 6 if dist >= -3 else 7) if self.inactive_dim else curses.color_pair(1)
 
                 x, clipped = self._place(line, w)
                 scr.addstr(lyric_start + row, x, clipped, attr)
@@ -489,18 +815,15 @@ class LyricSpot:
 
 
 def main():
-    if "--version" in sys.argv or "-v" in sys.argv:
+    parser = argparse.ArgumentParser(description="lyricspot - terminal lyrics viewer")
+    parser.add_argument("--version",     action="store_true", help="print version and exit")
+    parser.add_argument("--reset",       action="store_true", help="clear saved settings")
+    args = parser.parse_args()
+
+    if args.version:
         print(f"lyricspot {__version__}")
         return
-    if "--help" in sys.argv or "-h" in sys.argv:
-        print("usage: lyricspot [--reset] [--version]")
-        print()
-        print("args:")
-        print("[--reset] resets your cache")
-        print("[--version] prints your version")
-
-        return
-    if "--reset" in sys.argv:
+    if args.reset:
         try:
             os.remove(CONFIG_FILE)
             print("settings cleared")
