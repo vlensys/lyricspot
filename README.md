@@ -1,6 +1,8 @@
 # lyricspot
 A lightweight terminal tool that live-syncs song lyrics with whatever you’re playing. 
-<img width="2553" height="1561" alt="image" src="https://github.com/user-attachments/assets/73d9c495-fbc4-4c68-b75f-eecd7f2b09bc" />
+
+<img width="2538" height="1600" alt="image" src="https://github.com/user-attachments/assets/74522792-547d-4d30-85e7-fd4c2cfb61a1" />
+
 
 # install
 
@@ -72,5 +74,3 @@ lyricspot --reset
 - Works with any MPRIS-compatible player: mpv, vlc, cmus, rhythmbox, etc.
 - Lyrics are fetched from [lrclib.net](https://lrclib.net)
 - Tested on Arch and Artix. Report issues in [issues](https://github.com/vlensys/lyricspot/issues).
-
-ty snoowfall for the ui and playerctl
