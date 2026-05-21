@@ -3,7 +3,9 @@ import argparse
 import curses
 import difflib
 import json
+import math
 import os
+import random
 import re
 import subprocess
 import threading
@@ -39,6 +41,8 @@ DEFAULT_SETTINGS = {
     "center": True,
     "upper": False,
     "bold": True,
+    "visualizer": True,
+    "visualizer_type": "bars",
     "colors": {
         "header_title": 231,
         "header_artist": 244,
@@ -76,7 +80,7 @@ def merge_settings(saved):
     settings = dict(DEFAULT_SETTINGS)
     settings["colors"] = dict(DEFAULT_SETTINGS["colors"])
     if isinstance(saved, dict):
-        for key in ("offset", "header", "center", "upper", "bold"):
+        for key in ("offset", "header", "center", "upper", "bold", "visualizer", "visualizer_type"):
             if key in saved:
                 settings[key] = saved[key]
         if isinstance(saved.get("colors"), dict):
@@ -341,6 +345,123 @@ def init_colors(settings):
         init_pair(LYRIC_GRADIENT_PAIR + i, fg)
 
 
+def update_visualizer(viz_state, num_bars, max_height, playing):
+    if len(viz_state.get("heights", [])) != num_bars:
+        viz_state["heights"] = [0.0] * num_bars
+        viz_state["peaks"] = [0.0] * num_bars
+        viz_state["phase"] = [random.random() * 100 for _ in range(num_bars)]
+        viz_state["speed"] = [0.05 + random.random() * 0.15 for _ in range(num_bars)]
+        viz_state["last_t"] = time.monotonic()
+
+    now = time.monotonic()
+    dt = max(0.001, min(0.5, now - viz_state.get("last_t", now)))
+    viz_state["last_t"] = now
+
+    gravity = 8.0 * dt
+    rise_speed = 15.0 * dt
+    fall_speed = 10.0 * dt
+
+    for i in range(num_bars):
+        if playing:
+            viz_state["phase"][i] += viz_state["speed"][i] * dt * 30.0
+            pos_frac = i / max(1, num_bars - 1)
+            val = math.sin(viz_state["phase"][i]) * 0.4 + 0.5
+            val += math.sin(now * 15.0 + i) * 0.15
+            val += math.cos(now * 2.0 + i * 0.3) * 0.2
+            
+            if pos_frac < 0.3:
+                val *= 1.1 + math.sin(now * 4.0) * 0.2
+            elif pos_frac > 0.7:
+                val *= 0.7 + math.cos(now * 8.0) * 0.3
+            else:
+                val *= 0.8 + math.sin(now * 5.0) * 0.1
+                
+            val = clamp(val * max_height, 0, max_height)
+        else:
+            val = 0.0
+
+        cur = viz_state["heights"][i]
+        if val > cur:
+            cur = min(max_height, cur + rise_speed * (val - cur))
+        else:
+            cur = max(0.0, cur - fall_speed * (cur - val))
+        viz_state["heights"][i] = cur
+
+        peak = viz_state["peaks"][i]
+        if cur >= peak:
+            peak = cur
+        else:
+            peak = max(0.0, peak - gravity)
+        viz_state["peaks"][i] = peak
+
+
+def draw_visualizer(stdscr, settings, playing, viz_state):
+    if not settings.get("visualizer", True):
+        return
+    h, w = stdscr.getmaxyx()
+    viz_height = 5
+    start_y = h - 2
+    
+    num_bars = (w - 4) // 2
+    if num_bars < 3:
+        return
+        
+    update_visualizer(viz_state, num_bars, viz_height, playing)
+    
+    BLOCKS = [" ", " ", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
+    viz_type = settings.get("visualizer_type", "bars")
+    
+    for i in range(num_bars):
+        h_val = viz_state["heights"][i]
+        p_val = viz_state["peaks"][i]
+        x = 2 + i * 2
+        
+        for y_offset in range(viz_height):
+            y = start_y - y_offset
+            color_idx = clamp(3 - y_offset, 0, 3)
+            pair = curses.color_pair(LYRIC_GRADIENT_PAIR + color_idx)
+            
+            if viz_type == "bars":
+                if h_val >= y_offset + 1:
+                    safe_add(stdscr, y, x, "█", pair)
+                elif h_val > y_offset:
+                    frac = h_val - y_offset
+                    idx = clamp(int(frac * 8), 0, 8)
+                    if idx > 0:
+                        safe_add(stdscr, y, x, BLOCKS[idx], pair)
+            elif viz_type == "wave":
+                if y_offset <= h_val < y_offset + 1 and h_val > 0.1:
+                    frac = h_val - y_offset
+                    idx = clamp(int(frac * 8), 0, 8)
+                    if idx > 0:
+                        safe_add(stdscr, y, x, BLOCKS[idx], pair)
+                    else:
+                        safe_add(stdscr, y, x, "-", pair)
+            elif viz_type == "retro":
+                if h_val >= y_offset + 1:
+                    safe_add(stdscr, y, x, "#", pair)
+                elif h_val > y_offset + 0.5:
+                    safe_add(stdscr, y, x, "=", pair)
+                elif h_val > y_offset:
+                    safe_add(stdscr, y, x, "-", pair)
+            elif viz_type == "dots":
+                if y_offset <= h_val < y_offset + 1 and h_val > 0.1:
+                    safe_add(stdscr, y, x, "•", pair | curses.A_BOLD)
+                    
+        if viz_type in ("bars", "retro", "dots"):
+            peak_y = start_y - int(p_val)
+            if int(p_val) > int(h_val) and 0 <= int(p_val) < viz_height:
+                color_idx = clamp(3 - int(p_val), 0, 3)
+                pair = curses.color_pair(LYRIC_GRADIENT_PAIR + color_idx)
+                if viz_type == "bars":
+                    char = "▔"
+                elif viz_type == "retro":
+                    char = "-"
+                else:
+                    char = "•"
+                safe_add(stdscr, peak_y, x, char, pair | (curses.A_BOLD if viz_type == "dots" else 0))
+
+
 def draw_bar(stdscr, y, frac):
     _, w = stdscr.getmaxyx()
     width = max(1, w - 4)
@@ -360,7 +481,8 @@ def lyric_attr(i, cur, settings):
 def draw_lyrics(stdscr, lines, pos, settings, plain=""):
     h, _ = stdscr.getmaxyx()
     top = 3 if settings["header"] else 1
-    rows = max(1, h - top)
+    viz_height = 5 if settings.get("visualizer", True) else 0
+    rows = max(1, h - top - viz_height - 1)
     if not lines:
         msg = "lyrics not found :("
         if plain:
@@ -376,7 +498,7 @@ def draw_lyrics(stdscr, lines, pos, settings, plain=""):
     shown = lines[start:start + rows]
     y = top
     for i, (t, text) in enumerate(shown, start):
-        if y >= h - 1:
+        if y >= h - 1 - viz_height:
             break
         attr = lyric_attr(i, cur, settings)
         if break_after == i:
@@ -390,7 +512,7 @@ def draw_lyrics(stdscr, lines, pos, settings, plain=""):
         else:
             safe_add(stdscr, y, 2, text, attr)
         y += 1
-        if break_after == i and y < h - 1:
+        if break_after == i and y < h - 1 - viz_height:
             attr = lyric_attr(i, i, settings)
             text = "> ..."
             if settings["center"]:
@@ -400,7 +522,7 @@ def draw_lyrics(stdscr, lines, pos, settings, plain=""):
             y += 1
 
 
-def draw(stdscr, meta, lines, plain, settings, pos):
+def draw(stdscr, meta, lines, plain, settings, pos, viz_state):
     stdscr.erase()
     h, w = stdscr.getmaxyx()
     dur = meta.get("duration") or 0
@@ -418,6 +540,8 @@ def draw(stdscr, meta, lines, plain, settings, pos):
         safe_add(stdscr, 0, max(1, w - len(off) - 1), off, curses.color_pair(PAIR["header_offset"]))
         draw_bar(stdscr, 1, pos / dur if dur else 0)
     draw_lyrics(stdscr, lines, pos, settings, plain)
+    playing = (meta.get("status") == "Playing")
+    draw_visualizer(stdscr, settings, playing, viz_state)
     safe_add(stdscr, h - 1, 1, "paused" if meta.get("status") == "Paused" else "", curses.color_pair(PAIR["status"]))
     stdscr.refresh()
 
@@ -463,6 +587,7 @@ def main(stdscr, use_cache=True):
     last_meta = 0
     last_save = 0
     pos_state = {"pos": None, "seen": 0.0, "t": 0.0}
+    viz_state = {}
     job = None
     while True:
         now = time.monotonic()
@@ -481,7 +606,7 @@ def main(stdscr, use_cache=True):
             lines, plain = job["lines"], job["plain"]
             job = None
         pos = smooth_pos(get_pos(), pos_state)
-        draw(stdscr, meta, lines, plain, settings, pos)
+        draw(stdscr, meta, lines, plain, settings, pos, viz_state)
         ch = stdscr.getch()
         if ch in (27, ord("q"), ord("Q")):
             break
@@ -497,6 +622,13 @@ def main(stdscr, use_cache=True):
             settings["bold"] = not settings["bold"]
         elif ch == ord("U"):
             settings["upper"] = not settings["upper"]
+        elif ch == ord("v"):
+            settings["visualizer"] = not settings.get("visualizer", True)
+        elif ch == ord("V"):
+            types = ["bars", "wave", "retro", "dots"]
+            current = settings.get("visualizer_type", "bars")
+            idx = (types.index(current) + 1) if current in types else 1
+            settings["visualizer_type"] = types[idx % len(types)]
         if now - last_save > 2:
             save_json(SETTINGS, settings)
             last_save = now
