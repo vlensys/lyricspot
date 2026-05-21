@@ -7,6 +7,7 @@ import math
 import os
 import random
 import re
+import struct
 import subprocess
 import threading
 import time
@@ -43,6 +44,7 @@ DEFAULT_SETTINGS = {
     "bold": True,
     "visualizer": True,
     "visualizer_type": "bars",
+    "visualizer_source": "loopback",
     "colors": {
         "header_title": 231,
         "header_artist": 244,
@@ -55,6 +57,97 @@ DEFAULT_SETTINGS = {
         "muted": 8,
     },
 }
+
+AUDIO_STATE = {
+    "enabled": True,
+    "magnitudes": [0.0] * 128,
+    "active": False,
+    "lock": threading.Lock(),
+}
+
+
+def fft(a):
+    n = len(a)
+    if n <= 1:
+        return a
+    ev = fft(a[0::2])
+    od = fft(a[1::2])
+    t = [math.e ** (-2j * math.pi * k / n) * od[k] for k in range(n // 2)]
+    return [ev[k] + t[k] for k in range(n // 2)] + [ev[k] - t[k] for k in range(n // 2)]
+
+
+def get_eq_bands(magnitudes, num_bars):
+    if not magnitudes:
+        return [0.0] * num_bars
+    out = []
+    min_bin = 1.0
+    max_bin = len(magnitudes) - 1.0
+    for i in range(num_bars):
+        f_start = min_bin * ((max_bin / min_bin) ** (i / num_bars))
+        f_end = min_bin * ((max_bin / min_bin) ** ((i + 1) / num_bars))
+        start_idx = max(1, int(f_start))
+        end_idx = min(len(magnitudes), max(start_idx + 1, int(f_end)))
+        val = sum(magnitudes[start_idx:end_idx]) / (end_idx - start_idx)
+        out.append(val)
+    return out
+
+
+def start_audio_capture():
+    sink = sh("pactl", "get-default-sink")
+    if not sink:
+        return None
+    source = sink + ".monitor"
+    cmd = [
+        "parec",
+        "-d", source,
+        "--latency-msec=10",
+        "--raw",
+        "--channels=1",
+        "--rate=8000",
+        "--format=s16le"
+    ]
+    try:
+        return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except Exception:
+        return None
+
+
+def audio_capture_loop():
+    global AUDIO_STATE
+    N = 256
+    hamming = [0.54 - 0.46 * math.cos(2 * math.pi * n / (N - 1)) for n in range(N)]
+    proc = None
+    while AUDIO_STATE["enabled"]:
+        if proc is None or proc.poll() is not None:
+            if proc:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            proc = start_audio_capture()
+            if proc is None:
+                time.sleep(1.0)
+                continue
+        try:
+            data = proc.stdout.read(512)
+            if len(data) < 512:
+                proc = None
+                continue
+            samples = struct.unpack("<256h", data)
+            x = [(samples[i] / 32768.0) * hamming[i] for i in range(256)]
+            spectrum = fft(x)
+            mags = [abs(spectrum[i]) for i in range(128)]
+            with AUDIO_STATE["lock"]:
+                AUDIO_STATE["magnitudes"] = mags
+                AUDIO_STATE["active"] = True
+        except Exception:
+            proc = None
+            time.sleep(0.1)
+    if proc:
+        try:
+            proc.kill()
+        except Exception:
+            pass
 PAIR = {
     "header_artist": 1,
     "current_lyric": 2,
@@ -80,7 +173,7 @@ def merge_settings(saved):
     settings = dict(DEFAULT_SETTINGS)
     settings["colors"] = dict(DEFAULT_SETTINGS["colors"])
     if isinstance(saved, dict):
-        for key in ("offset", "header", "center", "upper", "bold", "visualizer", "visualizer_type"):
+        for key in ("offset", "header", "center", "upper", "bold", "visualizer", "visualizer_type", "visualizer_source"):
             if key in saved:
                 settings[key] = saved[key]
         if isinstance(saved.get("colors"), dict):
@@ -345,48 +438,70 @@ def init_colors(settings):
         init_pair(LYRIC_GRADIENT_PAIR + i, fg)
 
 
-def update_visualizer(viz_state, num_bars, max_height, playing):
+def update_visualizer(viz_state, num_bars, max_height, playing, settings):
     if len(viz_state.get("heights", [])) != num_bars:
         viz_state["heights"] = [0.0] * num_bars
         viz_state["peaks"] = [0.0] * num_bars
         viz_state["phase"] = [random.random() * 100 for _ in range(num_bars)]
         viz_state["speed"] = [0.05 + random.random() * 0.15 for _ in range(num_bars)]
         viz_state["last_t"] = time.monotonic()
+        viz_state["running_peak"] = 0.05
 
     now = time.monotonic()
     dt = max(0.001, min(0.5, now - viz_state.get("last_t", now)))
     viz_state["last_t"] = now
 
     gravity = 8.0 * dt
-    rise_speed = 15.0 * dt
-    fall_speed = 10.0 * dt
+    rise_speed = 20.0 * dt
+    fall_speed = 12.0 * dt
+
+    source = settings.get("visualizer_source", "loopback")
+    has_audio = False
+
+    if source == "loopback" and AUDIO_STATE["active"]:
+        with AUDIO_STATE["lock"]:
+            mags = list(AUDIO_STATE["magnitudes"])
+        bands = get_eq_bands(mags, num_bars)
+        if any(v > 0.0001 for v in bands):
+            has_audio = True
+            current_peak = max(bands)
+            viz_state["running_peak"] = 0.98 * viz_state["running_peak"] + 0.02 * max(current_peak, 0.001)
+            scale = max_height / max(0.001, viz_state["running_peak"])
+            for i in range(num_bars):
+                val = clamp(bands[i] * scale * 0.8, 0.0, max_height)
+                cur = viz_state["heights"][i]
+                if val > cur:
+                    cur = min(max_height, cur + rise_speed * (val - cur) * 2.0)
+                else:
+                    cur = max(0.0, cur - fall_speed * (cur - val) * 0.8)
+                viz_state["heights"][i] = cur
+
+    if not has_audio:
+        for i in range(num_bars):
+            if playing:
+                viz_state["phase"][i] += viz_state["speed"][i] * dt * 30.0
+                pos_frac = i / max(1, num_bars - 1)
+                val = math.sin(viz_state["phase"][i]) * 0.4 + 0.5
+                val += math.sin(now * 15.0 + i) * 0.15
+                val += math.cos(now * 2.0 + i * 0.3) * 0.2
+                if pos_frac < 0.3:
+                    val *= 1.1 + math.sin(now * 4.0) * 0.2
+                elif pos_frac > 0.7:
+                    val *= 0.7 + math.cos(now * 8.0) * 0.3
+                else:
+                    val *= 0.8 + math.sin(now * 5.0) * 0.1
+                val = clamp(val * max_height, 0, max_height)
+            else:
+                val = 0.0
+            cur = viz_state["heights"][i]
+            if val > cur:
+                cur = min(max_height, cur + rise_speed * (val - cur))
+            else:
+                cur = max(0.0, cur - fall_speed * (cur - val))
+            viz_state["heights"][i] = cur
 
     for i in range(num_bars):
-        if playing:
-            viz_state["phase"][i] += viz_state["speed"][i] * dt * 30.0
-            pos_frac = i / max(1, num_bars - 1)
-            val = math.sin(viz_state["phase"][i]) * 0.4 + 0.5
-            val += math.sin(now * 15.0 + i) * 0.15
-            val += math.cos(now * 2.0 + i * 0.3) * 0.2
-            
-            if pos_frac < 0.3:
-                val *= 1.1 + math.sin(now * 4.0) * 0.2
-            elif pos_frac > 0.7:
-                val *= 0.7 + math.cos(now * 8.0) * 0.3
-            else:
-                val *= 0.8 + math.sin(now * 5.0) * 0.1
-                
-            val = clamp(val * max_height, 0, max_height)
-        else:
-            val = 0.0
-
         cur = viz_state["heights"][i]
-        if val > cur:
-            cur = min(max_height, cur + rise_speed * (val - cur))
-        else:
-            cur = max(0.0, cur - fall_speed * (cur - val))
-        viz_state["heights"][i] = cur
-
         peak = viz_state["peaks"][i]
         if cur >= peak:
             peak = cur
@@ -406,7 +521,7 @@ def draw_visualizer(stdscr, settings, playing, viz_state):
     if num_bars < 3:
         return
         
-    update_visualizer(viz_state, num_bars, viz_height, playing)
+    update_visualizer(viz_state, num_bars, viz_height, playing, settings)
     
     BLOCKS = [" ", " ", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
     viz_type = settings.get("visualizer_type", "bars")
@@ -542,7 +657,14 @@ def draw(stdscr, meta, lines, plain, settings, pos, viz_state):
     draw_lyrics(stdscr, lines, pos, settings, plain)
     playing = (meta.get("status") == "Playing")
     draw_visualizer(stdscr, settings, playing, viz_state)
-    safe_add(stdscr, h - 1, 1, "paused" if meta.get("status") == "Paused" else "", curses.color_pair(PAIR["status"]))
+    status = []
+    if meta.get("status") == "Paused":
+        status.append("paused")
+    if settings.get("visualizer", True):
+        src = settings.get("visualizer_source", "loopback")
+        status.append(f"EQ: {src}")
+    status_str = " | ".join(status)
+    safe_add(stdscr, h - 1, 1, status_str, curses.color_pair(PAIR["status"]))
     stdscr.refresh()
 
 
@@ -575,6 +697,7 @@ def begin_fetch(meta, cache, use_cache):
 
 
 def main(stdscr, use_cache=True):
+    global AUDIO_STATE
     curses.curs_set(0)
     stdscr.nodelay(True)
     stdscr.timeout(80)
@@ -589,50 +712,60 @@ def main(stdscr, use_cache=True):
     pos_state = {"pos": None, "seen": 0.0, "t": 0.0}
     viz_state = {}
     job = None
-    while True:
-        now = time.monotonic()
-        if now - last_meta > 0.7:
-            new = get_meta()
-            if new and key_for(new) != last_key:
-                meta = new
-                last_key = key_for(meta)
-                smooth_pos(0, pos_state, True)
-                lines, plain = [], "searching"
-                job = begin_fetch(meta, cache, use_cache)
-            elif new:
-                meta = new
-            last_meta = now
-        if job and job["done"] and job["key"] == last_key:
-            lines, plain = job["lines"], job["plain"]
-            job = None
-        pos = smooth_pos(get_pos(), pos_state)
-        draw(stdscr, meta, lines, plain, settings, pos, viz_state)
-        ch = stdscr.getch()
-        if ch in (27, ord("q"), ord("Q")):
-            break
-        elif ch == curses.KEY_UP:
-            settings["offset"] = round(settings["offset"] + 0.25, 2)
-        elif ch == curses.KEY_DOWN:
-            settings["offset"] = round(settings["offset"] - 0.25, 2)
-        elif ch == ord("u"):
-            settings["header"] = not settings["header"]
-        elif ch == ord("c"):
-            settings["center"] = not settings["center"]
-        elif ch == ord("b"):
-            settings["bold"] = not settings["bold"]
-        elif ch == ord("U"):
-            settings["upper"] = not settings["upper"]
-        elif ch == ord("v"):
-            settings["visualizer"] = not settings.get("visualizer", True)
-        elif ch == ord("V"):
-            types = ["bars", "wave", "retro", "dots"]
-            current = settings.get("visualizer_type", "bars")
-            idx = (types.index(current) + 1) if current in types else 1
-            settings["visualizer_type"] = types[idx % len(types)]
-        if now - last_save > 2:
-            save_json(SETTINGS, settings)
-            last_save = now
-    save_json(SETTINGS, settings)
+
+    AUDIO_STATE["enabled"] = True
+    threading.Thread(target=audio_capture_loop, daemon=True).start()
+
+    try:
+        while True:
+            now = time.monotonic()
+            if now - last_meta > 0.7:
+                new = get_meta()
+                if new and key_for(new) != last_key:
+                    meta = new
+                    last_key = key_for(meta)
+                    smooth_pos(0, pos_state, True)
+                    lines, plain = [], "searching"
+                    job = begin_fetch(meta, cache, use_cache)
+                elif new:
+                    meta = new
+                last_meta = now
+            if job and job["done"] and job["key"] == last_key:
+                lines, plain = job["lines"], job["plain"]
+                job = None
+            pos = smooth_pos(get_pos(), pos_state)
+            draw(stdscr, meta, lines, plain, settings, pos, viz_state)
+            ch = stdscr.getch()
+            if ch in (27, ord("q"), ord("Q")):
+                break
+            elif ch == curses.KEY_UP:
+                settings["offset"] = round(settings["offset"] + 0.25, 2)
+            elif ch == curses.KEY_DOWN:
+                settings["offset"] = round(settings["offset"] - 0.25, 2)
+            elif ch == ord("u"):
+                settings["header"] = not settings["header"]
+            elif ch == ord("c"):
+                settings["center"] = not settings["center"]
+            elif ch == ord("b"):
+                settings["bold"] = not settings["bold"]
+            elif ch == ord("U"):
+                settings["upper"] = not settings["upper"]
+            elif ch == ord("v"):
+                settings["visualizer"] = not settings.get("visualizer", True)
+            elif ch == ord("V"):
+                types = ["bars", "wave", "retro", "dots"]
+                current = settings.get("visualizer_type", "bars")
+                idx = (types.index(current) + 1) if current in types else 1
+                settings["visualizer_type"] = types[idx % len(types)]
+            elif ch == ord("a"):
+                current_source = settings.get("visualizer_source", "loopback")
+                settings["visualizer_source"] = "mock" if current_source == "loopback" else "loopback"
+            if now - last_save > 2:
+                save_json(SETTINGS, settings)
+                last_save = now
+    finally:
+        AUDIO_STATE["enabled"] = False
+        save_json(SETTINGS, settings)
 
 
 if __name__ == "__main__":
