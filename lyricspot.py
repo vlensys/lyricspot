@@ -479,6 +479,8 @@ def update_visualizer(viz_state, num_bars, max_height, playing, settings):
         viz_state["peaks_l"] = [0.0] * num_bars
         viz_state["heights_r"] = [0.0] * num_bars
         viz_state["peaks_r"] = [0.0] * num_bars
+        viz_state["prev_mags_l"] = [0.0] * 128
+        viz_state["prev_mags_r"] = [0.0] * 128
         viz_state["phase"] = [random.random() * 100 for _ in range(num_bars)]
         viz_state["speed"] = [0.05 + random.random() * 0.15 for _ in range(num_bars)]
         viz_state["last_t"] = time.monotonic()
@@ -489,10 +491,6 @@ def update_visualizer(viz_state, num_bars, max_height, playing, settings):
     dt = max(0.001, min(0.5, now - viz_state.get("last_t", now)))
     viz_state["last_t"] = now
 
-    gravity = 8.0 * dt
-    rise_speed = 22.0 * dt
-    fall_speed = 14.0 * dt
-
     source = settings.get("visualizer_source", "loopback")
     has_audio = False
 
@@ -500,30 +498,44 @@ def update_visualizer(viz_state, num_bars, max_height, playing, settings):
         with AUDIO_STATE["lock"]:
             mags_l = list(AUDIO_STATE["mags_l"])
             mags_r = list(AUDIO_STATE["mags_r"])
-        bands_l = get_eq_bands(mags_l, num_bars)
-        bands_r = get_eq_bands(mags_r, num_bars)
+        
+        # Temporal smoothing of raw magnitudes to eliminate high-frequency jitter
+        for i in range(128):
+            viz_state["prev_mags_l"][i] = viz_state["prev_mags_l"][i] * 0.45 + mags_l[i] * 0.55
+            viz_state["prev_mags_r"][i] = viz_state["prev_mags_r"][i] * 0.45 + mags_r[i] * 0.55
+            
+        bands_l = get_eq_bands(viz_state["prev_mags_l"], num_bars)
+        bands_r = get_eq_bands(viz_state["prev_mags_r"], num_bars)
         if any(v > 0.0001 for v in bands_l + bands_r):
             has_audio = True
             peak_l = max(bands_l)
             peak_r = max(bands_r)
-            viz_state["running_peak_l"] = 0.98 * viz_state["running_peak_l"] + 0.02 * max(peak_l, 0.001)
-            viz_state["running_peak_r"] = 0.98 * viz_state["running_peak_r"] + 0.02 * max(peak_r, 0.001)
+            viz_state["running_peak_l"] = 0.97 * viz_state["running_peak_l"] + 0.03 * max(peak_l, 0.001)
+            viz_state["running_peak_r"] = 0.97 * viz_state["running_peak_r"] + 0.03 * max(peak_r, 0.001)
             scale_l = max_height / max(0.001, viz_state["running_peak_l"])
             scale_r = max_height / max(0.001, viz_state["running_peak_r"])
             for i in range(num_bars):
                 val_l = clamp(bands_l[i] * scale_l * 0.85, 0.0, max_height)
                 val_r = clamp(bands_r[i] * scale_r * 0.85, 0.0, max_height)
+                
+                # Exponential smoothing physics for Left Channel
                 cur_l = viz_state["heights_l"][i]
                 if val_l > cur_l:
-                    cur_l = min(max_height, cur_l + rise_speed * (val_l - cur_l) * 2.2)
+                    alpha = math.exp(-26.0 * dt)
+                    cur_l = cur_l * alpha + val_l * (1.0 - alpha)
                 else:
-                    cur_l = max(0.0, cur_l - fall_speed * (cur_l - val_l) * 0.75)
+                    alpha = math.exp(-9.0 * dt)
+                    cur_l = cur_l * alpha + val_l * (1.0 - alpha)
                 viz_state["heights_l"][i] = cur_l
+                
+                # Exponential smoothing physics for Right Channel
                 cur_r = viz_state["heights_r"][i]
                 if val_r > cur_r:
-                    cur_r = min(max_height, cur_r + rise_speed * (val_r - cur_r) * 2.2)
+                    alpha = math.exp(-26.0 * dt)
+                    cur_r = cur_r * alpha + val_r * (1.0 - alpha)
                 else:
-                    cur_r = max(0.0, cur_r - fall_speed * (cur_r - val_r) * 0.75)
+                    alpha = math.exp(-9.0 * dt)
+                    cur_r = cur_r * alpha + val_r * (1.0 - alpha)
                 viz_state["heights_r"][i] = cur_r
 
     if not has_audio:
@@ -552,11 +564,14 @@ def update_visualizer(viz_state, num_bars, max_height, playing, settings):
             for ch_key, val in (("heights_l", val_l), ("heights_r", val_r)):
                 cur = viz_state[ch_key][i]
                 if val > cur:
-                    cur = min(max_height, cur + rise_speed * (val - cur))
+                    alpha = math.exp(-20.0 * dt)
+                    cur = cur * alpha + val * (1.0 - alpha)
                 else:
-                    cur = max(0.0, cur - fall_speed * (cur - val))
+                    alpha = math.exp(-7.0 * dt)
+                    cur = cur * alpha + val * (1.0 - alpha)
                 viz_state[ch_key][i] = cur
 
+    peak_decay = 4.0 * dt
     for i in range(num_bars):
         for ch_h, ch_p in (("heights_l", "peaks_l"), ("heights_r", "peaks_r")):
             cur = viz_state[ch_h][i]
@@ -564,7 +579,7 @@ def update_visualizer(viz_state, num_bars, max_height, playing, settings):
             if cur >= peak:
                 peak = cur
             else:
-                peak = max(0.0, peak - gravity)
+                peak = max(0.0, peak - peak_decay)
             viz_state[ch_p][i] = peak
 
 
@@ -786,7 +801,7 @@ def main(stdscr, use_cache=True):
     global AUDIO_STATE
     curses.curs_set(0)
     stdscr.nodelay(True)
-    stdscr.timeout(80)
+    stdscr.timeout(30)
     settings = merge_settings(load_json(SETTINGS, {}))
     init_colors(settings)
     cache = load_json(CACHE, {})
