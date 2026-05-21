@@ -1,7 +1,5 @@
 # lyricspot
 
-<img width="600" alt="image" src="https://github.com/user-attachments/assets/0ca8fe90-e68d-4382-9b50-213925f25044" />
-
 Terminal lyrics viewer with audio visualizer.
 
 **Requires:** Python 3.8+, `playerctl`, `parec`, `pactl`, 256-color terminal.

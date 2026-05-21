@@ -339,23 +339,86 @@ def fetch_lyrics(meta, cache, use_cache=True):
     return parse_lrc((found or {}).get("syncedLyrics")), ""
 
 
-def get_meta():
-    fmt = "{{title}}\t{{artist}}\t{{album}}\t{{mpris:length}}\t{{status}}"
-    raw = sh("playerctl", "metadata", "--format", fmt)
+def get_meta(player_arg=None):
+    fmt = "{{title}}\t{{artist}}\t{{album}}\t{{mpris:length}}\t{{status}}\t{{playerName}}"
+    if player_arg:
+        raw = sh("playerctl", "-p", player_arg, "metadata", "--format", fmt)
+    else:
+        raw = sh("playerctl", "-a", "metadata", "--format", fmt)
+        if not raw:
+            raw = sh("playerctl", "metadata", "--format", fmt)
     if not raw:
         return {}
-    parts = (raw.split("\t") + [""] * 5)[:5]
-    dur = 0
-    try:
-        dur = int(parts[3]) / 1000000
-    except Exception:
-        pass
-    return {"title": parts[0], "artist": parts[1], "album": parts[2], "duration": dur, "status": parts[4]}
+    
+    candidates = []
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        parts = (line.split("\t") + [""] * 6)[:6]
+        title, artist, album, length_str, status, player = parts
+        dur = 0
+        try:
+            dur = int(length_str) / 1000000
+        except Exception:
+            pass
+        candidates.append({
+            "title": title,
+            "artist": artist,
+            "album": album,
+            "duration": dur,
+            "status": status,
+            "player": player
+        })
+    if not candidates:
+        return {}
+    if player_arg:
+        for c in candidates:
+            if player_arg.lower() in c["player"].lower():
+                return c
+        return candidates[0]
+    
+    def get_score(c):
+        score = 0
+        if c["status"] == "Playing":
+            score += 10
+        elif c["status"] == "Paused":
+            score += 5
+        if c["artist"].strip():
+            score += 8
+        if c["title"].strip():
+            score += 4
+        title_lower = c["title"].lower()
+        if (
+            title_lower.endswith(".html") or
+            title_lower.endswith(".htm") or
+            title_lower.endswith(".php") or
+            title_lower.endswith(".js") or
+            "windowtype=" in title_lower or
+            "http://" in title_lower or
+            "https://" in title_lower or
+            "file://" in title_lower
+        ):
+            score -= 15
+        player_lower = c["player"].lower()
+        browsers = ["chromium", "firefox", "chrome", "brave", "opera", "vivaldi", "edge", "epiphany", "webkit"]
+        music_players = ["spotify", "vlc", "audacious", "mpd", "rhythmbox", "clementine", "strawberry", "cmus", "mplayer", "mpv", "lollypop", "sayonara", "quodlibet"]
+        is_browser = any(b in player_lower for b in browsers)
+        is_music = any(m in player_lower for m in music_players)
+        if is_music:
+            score += 5
+        if is_browser:
+            score -= 5
+        return score
+    
+    return max(candidates, key=get_score)
 
 
-def get_pos():
+def get_pos(player=None):
     try:
-        return float(sh("playerctl", "position") or 0)
+        args = ["playerctl", "position"]
+        if player:
+            args = ["playerctl", "-p", player, "position"]
+        return float(sh(*args) or 0)
     except Exception:
         return 0.0
 
@@ -757,6 +820,8 @@ def draw(stdscr, meta, lines, plain, settings, pos, viz_state):
     playing = (meta.get("status") == "Playing")
     draw_visualizer(stdscr, settings, playing, viz_state)
     status = []
+    if meta.get("player"):
+        status.append(f"player: {meta['player']}")
     if meta.get("status") == "Paused":
         status.append("paused")
     if settings.get("visualizer", True):
@@ -797,7 +862,7 @@ def begin_fetch(meta, cache, use_cache):
     return box
 
 
-def main(stdscr, use_cache=True):
+def main(stdscr, use_cache=True, player_arg=None):
     global AUDIO_STATE
     curses.curs_set(0)
     stdscr.nodelay(True)
@@ -821,7 +886,7 @@ def main(stdscr, use_cache=True):
         while True:
             now = time.monotonic()
             if now - last_meta > 0.7:
-                new = get_meta()
+                new = get_meta(player_arg)
                 if new and key_for(new) != last_key:
                     meta = new
                     last_key = key_for(meta)
@@ -834,7 +899,7 @@ def main(stdscr, use_cache=True):
             if job and job["done"] and job["key"] == last_key:
                 lines, plain = job["lines"], job["plain"]
                 job = None
-            pos = smooth_pos(get_pos(), pos_state)
+            pos = smooth_pos(get_pos(meta.get("player")), pos_state)
             draw(stdscr, meta, lines, plain, settings, pos, viz_state)
             ch = stdscr.getch()
             if ch in (27, ord("q"), ord("Q")):
@@ -889,6 +954,7 @@ if __name__ == "__main__":
     ap.add_argument("--reset", action="store_true")
     ap.add_argument("--clear", action="store_true")
     ap.add_argument("--cache", choices=("on", "off"), default="on")
+    ap.add_argument("-p", "--player", help="Force playerctl to use a specific player (e.g. spotify)")
     args = ap.parse_args()
     if args.reset:
         reset()
@@ -896,6 +962,6 @@ if __name__ == "__main__":
         clear_cache()
     else:
         try:
-            curses.wrapper(main, args.cache == "on")
+            curses.wrapper(main, args.cache == "on", args.player)
         except KeyboardInterrupt:
             pass
