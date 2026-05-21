@@ -45,6 +45,8 @@ DEFAULT_SETTINGS = {
     "visualizer": True,
     "visualizer_type": "bars",
     "visualizer_source": "loopback",
+    "visualizer_theme": "cyber",
+    "visualizer_height": 6,
     "colors": {
         "header_title": 231,
         "header_artist": 244,
@@ -58,9 +60,19 @@ DEFAULT_SETTINGS = {
     },
 }
 
+VIZ_THEMES = {
+    "classic": [46, 82, 118, 154, 190, 226, 214, 202, 196],
+    "cyber": [51, 45, 39, 93, 129, 165, 201, 198],
+    "fire": [52, 88, 124, 160, 196, 202, 208, 220, 226],
+    "grayscale": [234, 238, 242, 246, 250, 254, 231],
+}
+
+VIZ_GRADIENT_PAIR = 20
+
 AUDIO_STATE = {
     "enabled": True,
-    "magnitudes": [0.0] * 128,
+    "mags_l": [0.0] * 128,
+    "mags_r": [0.0] * 128,
     "active": False,
     "lock": threading.Lock(),
 }
@@ -102,7 +114,7 @@ def start_audio_capture():
         "-d", source,
         "--latency-msec=10",
         "--raw",
-        "--channels=1",
+        "--channels=2",
         "--rate=8000",
         "--format=s16le"
     ]
@@ -129,16 +141,23 @@ def audio_capture_loop():
                 time.sleep(1.0)
                 continue
         try:
-            data = proc.stdout.read(512)
-            if len(data) < 512:
+            # Stereo: 2 channels * 2 bytes * 256 samples = 1024 bytes
+            data = proc.stdout.read(1024)
+            if len(data) < 1024:
                 proc = None
                 continue
-            samples = struct.unpack("<256h", data)
-            x = [(samples[i] / 32768.0) * hamming[i] for i in range(256)]
-            spectrum = fft(x)
-            mags = [abs(spectrum[i]) for i in range(128)]
+            samples = struct.unpack("<512h", data)
+            left = samples[0::2]
+            right = samples[1::2]
+            x_l = [(left[i] / 32768.0) * hamming[i] for i in range(256)]
+            x_r = [(right[i] / 32768.0) * hamming[i] for i in range(256)]
+            spectrum_l = fft(x_l)
+            spectrum_r = fft(x_r)
+            mags_l = [abs(spectrum_l[i]) for i in range(128)]
+            mags_r = [abs(spectrum_r[i]) for i in range(128)]
             with AUDIO_STATE["lock"]:
-                AUDIO_STATE["magnitudes"] = mags
+                AUDIO_STATE["mags_l"] = mags_l
+                AUDIO_STATE["mags_r"] = mags_r
                 AUDIO_STATE["active"] = True
         except Exception:
             proc = None
@@ -173,7 +192,7 @@ def merge_settings(saved):
     settings = dict(DEFAULT_SETTINGS)
     settings["colors"] = dict(DEFAULT_SETTINGS["colors"])
     if isinstance(saved, dict):
-        for key in ("offset", "header", "center", "upper", "bold", "visualizer", "visualizer_type", "visualizer_source"):
+        for key in ("offset", "header", "center", "upper", "bold", "visualizer", "visualizer_type", "visualizer_source", "visualizer_theme", "visualizer_height"):
             if key in saved:
                 settings[key] = saved[key]
         if isinstance(saved.get("colors"), dict):
@@ -436,145 +455,210 @@ def init_colors(settings):
         init_pair(pair, color_value(colors.get(name), defaults.get(name, 231)))
     for i, fg in enumerate(color_list(colors.get("lyric_gradient"), defaults["lyric_gradient"])):
         init_pair(LYRIC_GRADIENT_PAIR + i, fg)
+    if curses.COLORS >= 256:
+        theme_name = settings.get("visualizer_theme", "cyber")
+        theme_colors = VIZ_THEMES.get(theme_name, VIZ_THEMES["cyber"])
+        for i, fg in enumerate(theme_colors):
+            init_pair(VIZ_GRADIENT_PAIR + i, fg)
+
+
+def get_viz_pair(y_offset, max_height, settings):
+    if curses.COLORS < 256:
+        color_idx = clamp(3 - int((y_offset / max_height) * 4), 0, 3)
+        return curses.color_pair(LYRIC_GRADIENT_PAIR + color_idx)
+    theme_name = settings.get("visualizer_theme", "cyber")
+    theme_colors = VIZ_THEMES.get(theme_name, VIZ_THEMES["cyber"])
+    theme_len = len(theme_colors)
+    color_idx = clamp(int((y_offset / max_height) * theme_len), 0, theme_len - 1)
+    return curses.color_pair(VIZ_GRADIENT_PAIR + color_idx)
 
 
 def update_visualizer(viz_state, num_bars, max_height, playing, settings):
-    if len(viz_state.get("heights", [])) != num_bars:
-        viz_state["heights"] = [0.0] * num_bars
-        viz_state["peaks"] = [0.0] * num_bars
+    if "heights_l" not in viz_state or len(viz_state.get("heights_l", [])) != num_bars:
+        viz_state["heights_l"] = [0.0] * num_bars
+        viz_state["peaks_l"] = [0.0] * num_bars
+        viz_state["heights_r"] = [0.0] * num_bars
+        viz_state["peaks_r"] = [0.0] * num_bars
         viz_state["phase"] = [random.random() * 100 for _ in range(num_bars)]
         viz_state["speed"] = [0.05 + random.random() * 0.15 for _ in range(num_bars)]
         viz_state["last_t"] = time.monotonic()
-        viz_state["running_peak"] = 0.05
+        viz_state["running_peak_l"] = 0.05
+        viz_state["running_peak_r"] = 0.05
 
     now = time.monotonic()
     dt = max(0.001, min(0.5, now - viz_state.get("last_t", now)))
     viz_state["last_t"] = now
 
     gravity = 8.0 * dt
-    rise_speed = 20.0 * dt
-    fall_speed = 12.0 * dt
+    rise_speed = 22.0 * dt
+    fall_speed = 14.0 * dt
 
     source = settings.get("visualizer_source", "loopback")
     has_audio = False
 
     if source == "loopback" and AUDIO_STATE["active"]:
         with AUDIO_STATE["lock"]:
-            mags = list(AUDIO_STATE["magnitudes"])
-        bands = get_eq_bands(mags, num_bars)
-        if any(v > 0.0001 for v in bands):
+            mags_l = list(AUDIO_STATE["mags_l"])
+            mags_r = list(AUDIO_STATE["mags_r"])
+        bands_l = get_eq_bands(mags_l, num_bars)
+        bands_r = get_eq_bands(mags_r, num_bars)
+        if any(v > 0.0001 for v in bands_l + bands_r):
             has_audio = True
-            current_peak = max(bands)
-            viz_state["running_peak"] = 0.98 * viz_state["running_peak"] + 0.02 * max(current_peak, 0.001)
-            scale = max_height / max(0.001, viz_state["running_peak"])
+            peak_l = max(bands_l)
+            peak_r = max(bands_r)
+            viz_state["running_peak_l"] = 0.98 * viz_state["running_peak_l"] + 0.02 * max(peak_l, 0.001)
+            viz_state["running_peak_r"] = 0.98 * viz_state["running_peak_r"] + 0.02 * max(peak_r, 0.001)
+            scale_l = max_height / max(0.001, viz_state["running_peak_l"])
+            scale_r = max_height / max(0.001, viz_state["running_peak_r"])
             for i in range(num_bars):
-                val = clamp(bands[i] * scale * 0.8, 0.0, max_height)
-                cur = viz_state["heights"][i]
-                if val > cur:
-                    cur = min(max_height, cur + rise_speed * (val - cur) * 2.0)
+                val_l = clamp(bands_l[i] * scale_l * 0.85, 0.0, max_height)
+                val_r = clamp(bands_r[i] * scale_r * 0.85, 0.0, max_height)
+                cur_l = viz_state["heights_l"][i]
+                if val_l > cur_l:
+                    cur_l = min(max_height, cur_l + rise_speed * (val_l - cur_l) * 2.2)
                 else:
-                    cur = max(0.0, cur - fall_speed * (cur - val) * 0.8)
-                viz_state["heights"][i] = cur
+                    cur_l = max(0.0, cur_l - fall_speed * (cur_l - val_l) * 0.75)
+                viz_state["heights_l"][i] = cur_l
+                cur_r = viz_state["heights_r"][i]
+                if val_r > cur_r:
+                    cur_r = min(max_height, cur_r + rise_speed * (val_r - cur_r) * 2.2)
+                else:
+                    cur_r = max(0.0, cur_r - fall_speed * (cur_r - val_r) * 0.75)
+                viz_state["heights_r"][i] = cur_r
 
     if not has_audio:
         for i in range(num_bars):
             if playing:
                 viz_state["phase"][i] += viz_state["speed"][i] * dt * 30.0
                 pos_frac = i / max(1, num_bars - 1)
-                val = math.sin(viz_state["phase"][i]) * 0.4 + 0.5
-                val += math.sin(now * 15.0 + i) * 0.15
-                val += math.cos(now * 2.0 + i * 0.3) * 0.2
+                val_l = math.sin(viz_state["phase"][i]) * 0.4 + 0.5
+                val_l += math.sin(now * 15.0 + i) * 0.15
+                val_r = math.cos(viz_state["phase"][i] * 0.9) * 0.4 + 0.5
+                val_r += math.cos(now * 12.0 + i * 1.2) * 0.15
                 if pos_frac < 0.3:
-                    val *= 1.1 + math.sin(now * 4.0) * 0.2
+                    val_l *= 1.1 + math.sin(now * 4.0) * 0.2
+                    val_r *= 1.1 + math.cos(now * 3.5) * 0.2
                 elif pos_frac > 0.7:
-                    val *= 0.7 + math.cos(now * 8.0) * 0.3
+                    val_l *= 0.7 + math.cos(now * 8.0) * 0.3
+                    val_r *= 0.7 + math.sin(now * 7.5) * 0.3
                 else:
-                    val *= 0.8 + math.sin(now * 5.0) * 0.1
-                val = clamp(val * max_height, 0, max_height)
+                    val_l *= 0.8 + math.sin(now * 5.0) * 0.1
+                    val_r *= 0.8 + math.cos(now * 4.5) * 0.1
+                val_l = clamp(val_l * max_height, 0, max_height)
+                val_r = clamp(val_r * max_height, 0, max_height)
             else:
-                val = 0.0
-            cur = viz_state["heights"][i]
-            if val > cur:
-                cur = min(max_height, cur + rise_speed * (val - cur))
-            else:
-                cur = max(0.0, cur - fall_speed * (cur - val))
-            viz_state["heights"][i] = cur
+                val_l = 0.0
+                val_r = 0.0
+            for ch_key, val in (("heights_l", val_l), ("heights_r", val_r)):
+                cur = viz_state[ch_key][i]
+                if val > cur:
+                    cur = min(max_height, cur + rise_speed * (val - cur))
+                else:
+                    cur = max(0.0, cur - fall_speed * (cur - val))
+                viz_state[ch_key][i] = cur
 
     for i in range(num_bars):
-        cur = viz_state["heights"][i]
-        peak = viz_state["peaks"][i]
-        if cur >= peak:
-            peak = cur
-        else:
-            peak = max(0.0, peak - gravity)
-        viz_state["peaks"][i] = peak
+        for ch_h, ch_p in (("heights_l", "peaks_l"), ("heights_r", "peaks_r")):
+            cur = viz_state[ch_h][i]
+            peak = viz_state[ch_p][i]
+            if cur >= peak:
+                peak = cur
+            else:
+                peak = max(0.0, peak - gravity)
+            viz_state[ch_p][i] = peak
+
+
+def draw_single_bar(stdscr, x, bar_width, h_val, p_val, viz_height, start_y, viz_type, settings):
+    BLOCKS = [" ", " ", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
+    char_bar = "█" * bar_width
+    for y_offset in range(viz_height):
+        y = start_y - y_offset
+        pair = get_viz_pair(y_offset, viz_height, settings)
+        if viz_type == "bars":
+            if h_val >= y_offset + 1:
+                safe_add(stdscr, y, x, char_bar, pair)
+            elif h_val > y_offset:
+                frac = h_val - y_offset
+                idx = clamp(int(frac * 8), 0, 8)
+                if idx > 0:
+                    safe_add(stdscr, y, x, BLOCKS[idx] * bar_width, pair)
+        elif viz_type == "wave":
+            if y_offset <= h_val < y_offset + 1 and h_val > 0.1:
+                frac = h_val - y_offset
+                idx = clamp(int(frac * 8), 0, 8)
+                if idx > 0:
+                    safe_add(stdscr, y, x, BLOCKS[idx] * bar_width, pair)
+                else:
+                    safe_add(stdscr, y, x, "-" * bar_width, pair)
+        elif viz_type == "retro":
+            if h_val >= y_offset + 1:
+                safe_add(stdscr, y, x, "#" * bar_width, pair)
+            elif h_val > y_offset + 0.5:
+                safe_add(stdscr, y, x, "=" * bar_width, pair)
+            elif h_val > y_offset:
+                safe_add(stdscr, y, x, "-" * bar_width, pair)
+        elif viz_type == "dots":
+            if y_offset <= h_val < y_offset + 1 and h_val > 0.1:
+                safe_add(stdscr, y, x, "•" * bar_width, pair | curses.A_BOLD)
+    if viz_type in ("bars", "retro", "dots"):
+        peak_y = start_y - int(p_val)
+        if int(p_val) > int(h_val) and 0 <= int(p_val) < viz_height:
+            pair = get_viz_pair(int(p_val), viz_height, settings)
+            if viz_type == "bars":
+                char = "▔" * bar_width
+            elif viz_type == "retro":
+                char = "-" * bar_width
+            else:
+                char = "•" * bar_width
+            safe_add(stdscr, peak_y, x, char, pair | (curses.A_BOLD if viz_type == "dots" else 0))
 
 
 def draw_visualizer(stdscr, settings, playing, viz_state):
     if not settings.get("visualizer", True):
         return
     h, w = stdscr.getmaxyx()
-    viz_height = 5
+    viz_height = settings.get("visualizer_height", 6)
     start_y = h - 2
-    
-    num_bars = (w - 4) // 2
-    if num_bars < 3:
-        return
-        
-    update_visualizer(viz_state, num_bars, viz_height, playing, settings)
-    
-    BLOCKS = [" ", " ", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
+    bar_width = 2 if w >= 60 else 1
+    col_width = bar_width + 1
+    viz_layout = settings.get("visualizer_layout", "center")
     viz_type = settings.get("visualizer_type", "bars")
-    
-    for i in range(num_bars):
-        h_val = viz_state["heights"][i]
-        p_val = viz_state["peaks"][i]
-        x = 2 + i * 2
-        
-        for y_offset in range(viz_height):
-            y = start_y - y_offset
-            color_idx = clamp(3 - y_offset, 0, 3)
-            pair = curses.color_pair(LYRIC_GRADIENT_PAIR + color_idx)
-            
-            if viz_type == "bars":
-                if h_val >= y_offset + 1:
-                    safe_add(stdscr, y, x, "█", pair)
-                elif h_val > y_offset:
-                    frac = h_val - y_offset
-                    idx = clamp(int(frac * 8), 0, 8)
-                    if idx > 0:
-                        safe_add(stdscr, y, x, BLOCKS[idx], pair)
-            elif viz_type == "wave":
-                if y_offset <= h_val < y_offset + 1 and h_val > 0.1:
-                    frac = h_val - y_offset
-                    idx = clamp(int(frac * 8), 0, 8)
-                    if idx > 0:
-                        safe_add(stdscr, y, x, BLOCKS[idx], pair)
-                    else:
-                        safe_add(stdscr, y, x, "-", pair)
-            elif viz_type == "retro":
-                if h_val >= y_offset + 1:
-                    safe_add(stdscr, y, x, "#", pair)
-                elif h_val > y_offset + 0.5:
-                    safe_add(stdscr, y, x, "=", pair)
-                elif h_val > y_offset:
-                    safe_add(stdscr, y, x, "-", pair)
-            elif viz_type == "dots":
-                if y_offset <= h_val < y_offset + 1 and h_val > 0.1:
-                    safe_add(stdscr, y, x, "•", pair | curses.A_BOLD)
-                    
-        if viz_type in ("bars", "retro", "dots"):
-            peak_y = start_y - int(p_val)
-            if int(p_val) > int(h_val) and 0 <= int(p_val) < viz_height:
-                color_idx = clamp(3 - int(p_val), 0, 3)
-                pair = curses.color_pair(LYRIC_GRADIENT_PAIR + color_idx)
-                if viz_type == "bars":
-                    char = "▔"
-                elif viz_type == "retro":
-                    char = "-"
-                else:
-                    char = "•"
-                safe_add(stdscr, peak_y, x, char, pair | (curses.A_BOLD if viz_type == "dots" else 0))
+    if viz_layout == "stereo":
+        half_w = (w - 6) // 2
+        num_bars = max(3, half_w // col_width)
+        update_visualizer(viz_state, num_bars, viz_height, playing, settings)
+        for i in range(num_bars):
+            h_val = viz_state["heights_l"][i]
+            p_val = viz_state["peaks_l"][i]
+            x = 2 + i * col_width
+            draw_single_bar(stdscr, x, bar_width, h_val, p_val, viz_height, start_y, viz_type, settings)
+        for i in range(num_bars):
+            h_val = viz_state["heights_r"][i]
+            p_val = viz_state["peaks_r"][i]
+            x = 2 + half_w + 2 + i * col_width
+            draw_single_bar(stdscr, x, bar_width, h_val, p_val, viz_height, start_y, viz_type, settings)
+    elif viz_layout == "center":
+        mid_x = w // 2
+        num_bars = max(3, (w - 6) // (2 * col_width))
+        update_visualizer(viz_state, num_bars, viz_height, playing, settings)
+        for i in range(num_bars):
+            h_val = viz_state["heights_l"][i]
+            p_val = viz_state["peaks_l"][i]
+            x = mid_x - 1 - i * col_width - bar_width
+            draw_single_bar(stdscr, x, bar_width, h_val, p_val, viz_height, start_y, viz_type, settings)
+        for i in range(num_bars):
+            h_val = viz_state["heights_r"][i]
+            p_val = viz_state["peaks_r"][i]
+            x = mid_x + 1 + i * col_width
+            draw_single_bar(stdscr, x, bar_width, h_val, p_val, viz_height, start_y, viz_type, settings)
+    else:
+        num_bars = max(3, (w - 4) // col_width)
+        update_visualizer(viz_state, num_bars, viz_height, playing, settings)
+        for i in range(num_bars):
+            h_val = (viz_state["heights_l"][i] + viz_state["heights_r"][i]) / 2.0
+            p_val = max(viz_state["peaks_l"][i], viz_state["peaks_r"][i])
+            x = 2 + i * col_width
+            draw_single_bar(stdscr, x, bar_width, h_val, p_val, viz_height, start_y, viz_type, settings)
 
 
 def draw_bar(stdscr, y, frac):
@@ -596,7 +680,7 @@ def lyric_attr(i, cur, settings):
 def draw_lyrics(stdscr, lines, pos, settings, plain=""):
     h, _ = stdscr.getmaxyx()
     top = 3 if settings["header"] else 1
-    viz_height = 5 if settings.get("visualizer", True) else 0
+    viz_height = settings.get("visualizer_height", 6) if settings.get("visualizer", True) else 0
     rows = max(1, h - top - viz_height - 1)
     if not lines:
         msg = "lyrics not found :("
@@ -662,7 +746,9 @@ def draw(stdscr, meta, lines, plain, settings, pos, viz_state):
         status.append("paused")
     if settings.get("visualizer", True):
         src = settings.get("visualizer_source", "loopback")
-        status.append(f"EQ: {src}")
+        layout = settings.get("visualizer_layout", "center")
+        theme = settings.get("visualizer_theme", "cyber")
+        status.append(f"EQ: {src} ({layout}, {theme})")
     status_str = " | ".join(status)
     safe_add(stdscr, h - 1, 1, status_str, curses.color_pair(PAIR["status"]))
     stdscr.refresh()
@@ -760,6 +846,21 @@ def main(stdscr, use_cache=True):
             elif ch == ord("a"):
                 current_source = settings.get("visualizer_source", "loopback")
                 settings["visualizer_source"] = "mock" if current_source == "loopback" else "loopback"
+            elif ch == ord("l"):
+                layouts = ["center", "stereo", "bars"]
+                curr_layout = settings.get("visualizer_layout", "center")
+                idx = (layouts.index(curr_layout) + 1) if curr_layout in layouts else 1
+                settings["visualizer_layout"] = layouts[idx % len(layouts)]
+            elif ch == ord("t"):
+                themes = ["cyber", "classic", "fire", "grayscale"]
+                curr_theme = settings.get("visualizer_theme", "cyber")
+                idx = (themes.index(curr_theme) + 1) if curr_theme in themes else 1
+                settings["visualizer_theme"] = themes[idx % len(themes)]
+                init_colors(settings)
+            elif ch == ord("+"):
+                settings["visualizer_height"] = min(15, settings.get("visualizer_height", 6) + 1)
+            elif ch == ord("-"):
+                settings["visualizer_height"] = max(3, settings.get("visualizer_height", 6) - 1)
             if now - last_save > 2:
                 save_json(SETTINGS, settings)
                 last_save = now
