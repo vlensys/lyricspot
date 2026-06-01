@@ -1,23 +1,22 @@
 # lyricspot
 
-<img width="600" alt="image" src="https://github.com/user-attachments/assets/0ca8fe90-e68d-4382-9b50-213925f25044" />
-
 Terminal lyrics viewer with audio visualizer.
+
+<img width="600" alt="screenshot" src="https://github.com/user-attachments/assets/0ca8fe90-e68d-4382-9b50-213925f25044" />
 
 **Requires:** Python 3.8+, `playerctl`, `parec`, `pactl`, 256-color terminal.
 
 ---
 
-## Overview
+## Quick Start
 
-lyricspot fetches synced lyrics from lrclib.net for the currently playing track and highlights the active line in real time. An audio visualizer runs at the bottom of the screen using PulseAudio loopback data.
-
----
-
-## Running
-
+```bash
+python3 lyricspot.py
 ```
-python lyricspot.py
+
+Or as a module:
+```bash
+python3 -m lyricspot
 ```
 
 **Flags:**
@@ -27,6 +26,7 @@ python lyricspot.py
 | `--cache on\|off` | Enable or disable lyrics caching (default: `on`) |
 | `--reset` | Delete all saved settings and cache |
 | `--clear` | Delete only the lyrics cache |
+| `-p, --player` | Force a specific MPRIS player (e.g. `spotify`) |
 
 ---
 
@@ -34,7 +34,7 @@ python lyricspot.py
 
 ### Lyrics Fetching
 
-On each track change, lyricspot queries lrclib.net using multiple strategies in order:
+On each track change, lyricspot queries [lrclib.net](https://lrclib.net) using multiple strategies in order:
 
 1. Direct lookup by title, artist, album, and duration
 2. Search by title and artist
@@ -44,11 +44,11 @@ Results are scored by metadata similarity and cached at `~/.config/lyricspot/cac
 
 ### Lyrics Sync
 
-lyricspot polls playback position via `playerctl` every ~700ms with smoothing applied to reduce jitter. The active line is found by binary search over the LRC timestamp list. A gap of more than 8 seconds between lines triggers a `> ...` break indicator.
+Playback position is polled via `playerctl` every ~700ms with EMA smoothing applied to reduce jitter. The active line is found by binary search over the LRC timestamp list. A gap of more than 8 seconds between lines triggers a `> ...` break indicator.
 
 ### Audio Visualizer
 
-A background thread reads stereo PCM audio from the PulseAudio sink monitor. It applies a Hamming window and runs a pure-Python FFT to compute frequency magnitudes, which are bucketed into logarithmic bands and rendered as vertical bars. When loopback capture fails, it falls back to an animated sine wave simulation.
+A background thread reads stereo PCM audio from the PulseAudio sink monitor at 8 kHz. It applies a Hamming window and runs an FFT (numpy if available, else iterative Cooley-Tukey with precomputed twiddle factors) to compute frequency magnitudes. These are bucketed into logarithmic bands and rendered as vertical bars. When loopback capture fails, it falls back to an animated sine wave simulation.
 
 ---
 
@@ -58,106 +58,116 @@ Settings auto-save to `~/.config/lyricspot/settings.json` every 2 seconds. All s
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `offset` | `0.0` | Lyric timing offset in seconds. Positive = earlier, negative = later. |
-| `header` | `true` | Show header bar with title, artist, and offset. |
-| `center` | `true` | Center lyrics horizontally. |
-| `upper` | `false` | Display active lyric line in uppercase. |
-| `bold` | `true` | Render active lyric line in bold. |
-| `visualizer` | `true` | Enable the audio visualizer. |
-| `visualizer_type` | `bars` | Visualizer style: `bars`, `wave`, `retro`, `dots`. |
-| `visualizer_source` | `loopback` | Audio source: `loopback` or `mock`. |
-| `visualizer_theme` | `cyber` | Color theme: `cyber`, `classic`, `fire`, `grayscale`. |
-| `visualizer_height` | `6` | Visualizer height in rows. Range: 3 to 15. |
+| `offset` | `0.0` | Lyric timing offset in seconds |
+| `header` | `true` | Show header bar with title, artist, offset |
+| `center` | `true` | Center lyrics horizontally |
+| `upper` | `false` | Display active lyric line in uppercase |
+| `bold` | `true` | Render active lyric line in bold |
+| `visualizer` | `true` | Enable the audio visualizer |
+| `visualizer_type` | `bars` | Style: `bars`, `wave`, `retro`, `dots` |
+| `visualizer_source` | `loopback` | Source: `loopback` or `mock` |
+| `visualizer_theme` | `cyber` | Theme: `cyber`, `classic`, `fire`, `grayscale` |
+| `visualizer_height` | `6` | Height in rows (3–15) |
 
 ---
 
 ## Keybinds
 
-### General
-
 | Key | Action |
 |-----|--------|
-| `q` / `Q` / `Esc` | Quit |
-| `Up` | Increase lyric offset by 0.25s |
-| `Down` | Decrease lyric offset by 0.25s |
-| `u` | Toggle header bar |
-| `c` | Toggle centered / left-aligned lyrics |
-| `b` | Toggle bold on active lyric line |
-| `U` | Toggle uppercase on active lyric line |
-
-### Visualizer
-
-| Key | Action |
-|-----|--------|
-| `v` | Toggle visualizer on or off |
-| `V` | Cycle type: `bars` > `wave` > `retro` > `dots` |
-| `t` | Cycle theme: `cyber` > `classic` > `fire` > `grayscale` |
-| `l` | Cycle layout: `center` > `stereo` > `bars` |
-| `a` | Toggle audio source between `loopback` and `mock` |
-| `+` | Increase visualizer height (max 15) |
-| `-` | Decrease visualizer height (min 3) |
+| `q` / `Esc` | Quit |
+| `Up` / `Down` | Adjust lyric offset ±0.25s |
+| `u` | Toggle header |
+| `c` | Toggle centered / left-aligned |
+| `b` | Toggle bold |
+| `U` | Toggle uppercase |
+| `v` | Toggle visualizer |
+| `V` | Cycle type |
+| `t` | Cycle theme |
+| `l` | Cycle layout |
+| `a` | Toggle audio source |
+| `+` / `-` | Adjust height |
 
 ---
 
-## Visualizer Detail
+## Developer Guide
 
-### Types
+### Project Structure
 
-| Type | Description |
-|------|-------------|
-| `bars` | Filled block bars with fractional heights using Unicode block characters. |
-| `wave` | Only the top edge of each bar is drawn, producing a waveform outline. |
-| `retro` | ASCII bars using `#`, `=`, and `-`. No Unicode required. |
-| `dots` | Single bold dot at the tip of each bar only. |
+```
+lyricspot/
+├── __init__.py          # Package marker + version
+├── __main__.py          # CLI entry point (argparse + curses.wrapper)
+├── config.py            # Constants, settings schema, module-level caches
+├── utils.py             # Pure utilities (FFT, audio capture, API, I/O, scoring)
+├── render.py            # All curses rendering (colors, visualizer, lyrics)
+└── tui.py               # Main event loop, state management, key dispatch
+lyricspot.py             # Thin backward-compatible wrapper (runs the package)
+```
 
-### Layouts
+### Module Dependencies
 
-| Layout | Description |
-|--------|-------------|
-| `center` | Left and right channels mirror outward from the screen center. |
-| `stereo` | Left channel on the left half, right channel on the right half. |
-| `bars` | Channels averaged and rendered as a single full-width bar set. |
+```
+config  (no project imports)
+    ↑
+utils   (imports from config)
+    ↑
+render  (imports from config, utils)
+    ↑
+tui     (imports from config, utils, render)
+    ↑
+__main__  (imports from config, utils, tui)
+```
 
-### Themes
+### Performance Optimizations
 
-| Theme | Colors |
-|-------|--------|
-| `cyber` | Cyan to magenta. |
-| `classic` | Green > yellow > red. |
-| `fire` | Dark red > orange > bright yellow. |
-| `grayscale` | Dark gray to white. |
+| Area | Technique | Speedup |
+|------|-----------|---------|
+| **FFT** | numpy fallback + iterative Cooley-Tukey with precomputed twiddle factors | ~10x pure Python / ~50x with numpy |
+| **Rendering** | Dirty-region tracking skips `erase()` on ~95% of frames; precomputed `VIZ_PAIR_CACHE` for color pairs | ~3x per frame |
+| **Audio** | `math.exp()` values cached once per frame; precomputed `HAMMING_256` constant; band boundary cache for EQ | ~5x per audio frame |
+| **API** | Reusable `SequenceMatcher`, precompiled regex, lazy cache writes (batch every 10s), normalized search terms | ~6x per track lookup |
 
-### Peak Indicators
+### Hacking
 
-Each bar tracks a peak that rises instantly and decays at 4 units/second. A marker renders above the bar at the peak position in `bars`, `retro`, and `dots` modes.
+```bash
+# Run directly
+python3 lyricspot.py
 
----
+# Or as a module (equivalent)
+python3 -m lyricspot
 
-## Files
+# Test FFT and core utilities
+python3 -c "
+from lyricspot.utils import fft, sim, get_eq_bands
+import math
+data = [math.sin(2*math.pi*10*i/256) for i in range(256)]
+result = fft(data)
+print('FFT peak at bin', max(range(128), key=lambda i: abs(result[i])))
+"
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LRCLIB_API` | `https://lrclib.net/api` | Override the lrclib API base URL |
+
+### Files
 
 | Path | Contents |
 |------|----------|
-| `~/.config/lyricspot/settings.json` | Runtime settings. Auto-saved every 2 seconds. |
-| `~/.config/lyricspot/cache.json` | Cached lyrics keyed by title, artist, and duration. |
+| `~/.config/lyricspot/settings.json` | Runtime settings (auto-saved) |
+| `~/.config/lyricspot/cache.json` | Cached lyrics keyed by `title\0artist\0duration` |
 
 ---
 
 ## Troubleshooting
 
-**Lyrics not found**
-lrclib.net does not index every release. The failed lookup is cached. Run `--clear` to remove it and retry.
+**Lyrics not found** — lrclib.net does not index every release. Run `--clear` to remove a failed cache entry and retry.
 
-**Visualizer shows animation instead of real audio**
-`parec` or `pactl` is missing, or the audio server is not running. Press `a` to switch to `mock` mode. Test with:
-```
-pactl get-default-sink
-```
+**Visualizer shows animation** — `parec`/`pactl` is missing. Run `pactl get-default-sink` to check. Press `a` to toggle mock mode.
 
-**Lyrics are consistently early or late**
-Use `Up` / `Down` to adjust offset in 0.25s steps. The current offset shows in the top-right corner of the header and saves automatically.
+**Lyrics early/late** — Use `Up`/`Down` to adjust offset in 0.25s steps. Offset shows in the header corner and saves automatically.
 
-**No output at all**
-`playerctl` must be installed and a supported media player must be running. Test with:
-```
-playerctl metadata
-```
+**No output** — Ensure `playerctl` is installed and a supported player is running. Run `playerctl metadata` to verify.
